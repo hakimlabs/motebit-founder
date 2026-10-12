@@ -444,7 +444,9 @@ describe("a pinned task with its target offline is never routed to another agent
     const delegator = await newAgent(relayA);
     const target = await newAgent(relayA); // offline, on A
     const decoy = await newAgent(relayB);
-    await list(relayB, decoy);
+    // Federated discovery lists only agents with an endpoint (a dead one: the
+    // executor relay hands the task to the agent's socket).
+    await list(relayB, decoy, { endpoint: "http://127.0.0.1:1/mcp" });
     const decoySock = fakeSocket(relayB, decoy.motebitId);
 
     const { status, body } = await submitPinned(relayA, delegator.motebitId, target.motebitId);
@@ -591,7 +593,7 @@ describe("only the target's bodies may claim a pinned task", () => {
     return { relay, port: (server.address() as AddressInfo).port };
   }
 
-  it("the delegator's own socket cannot claim a P2P task pinned to its worker", async () => {
+  it("the delegator's own socket is neither presented nor granted a P2P task pinned to its worker", async () => {
     const { relay, port } = await startRelay();
     const delegator = await newAgent(relay);
     const worker = await newAgent(relay);
@@ -639,6 +641,15 @@ describe("only the target's bodies may claim a pinned task", () => {
       }
     });
     await waitFor(() => (relay.connections.get(delegator.motebitId)?.length ?? 0) > 0);
+    // Reconnect recovery presents a pinned task only to its target's bodies.
+    await sleep(200);
+    expect(
+      replies.find(
+        (r) =>
+          r.type === "task_request" &&
+          (r as { task?: { task_id?: string } }).task?.task_id === taskId,
+      ),
+    ).toBeUndefined();
     ws.send(JSON.stringify({ type: "task_claim", task_id: taskId }));
     await waitFor(() =>
       replies.some(
@@ -648,6 +659,47 @@ describe("only the target's bodies may claim a pinned task", () => {
     );
     expect(replies.find((r) => r.task_id === taskId && r.type === "task_claimed")).toBeUndefined();
     expect(new TaskQueue(relay.moteDb.db).get(taskId)?.task.status).toBe("pending");
+  });
+});
+
+describe("a released forward re-presents a pinned task only to its target", () => {
+  it("a P2P task whose forward never reached its worker is not handed to the delegator's sockets", async () => {
+    const relay = await newRelay();
+    const delegator = await newAgent(relay);
+    const worker = await newAgent(relay);
+    // The paid worker's endpoint refuses connections: the forward ends
+    // without sending `tools/call`, and the grant is released.
+    await list(relay, worker, {
+      endpoint: "http://127.0.0.1:1/mcp",
+      unitCost: 0.5,
+      settlementAddress: WORKER_SOLANA_ADDR,
+    });
+    trust(relay, [delegator.motebitId], worker.motebitId);
+    const delegatorSock = fakeSocket(relay, delegator.motebitId);
+    const proof = buildP2pPaymentProof(relay, {
+      workerAddress: WORKER_SOLANA_ADDR,
+      unitCostMicro: toMicro(0.5),
+    });
+    const res = await relay.app.request(`/agent/${delegator.motebitId}/task`, {
+      method: "POST",
+      headers: { ...jsonAuthWithIdempotency(), "Idempotency-Key": proof.tx_hash },
+      body: JSON.stringify({
+        prompt: "push test",
+        submitted_by: delegator.motebitId,
+        target_agent: worker.motebitId,
+        settlement_mode: "p2p",
+        payment_proof: proof,
+        required_capabilities: [CAP],
+      }),
+    });
+    expect(res.status).toBe(201);
+    const taskId = ((await res.json()) as { task_id: string }).task_id;
+    // The forward is taken, fails, and releases its grant.
+    expect(
+      await waitFor(() => new TaskQueue(relay.moteDb.db).get(taskId)?.task.status === "pending"),
+    ).toBe(true);
+    await sleep(300);
+    expect(taskRequestsIn(delegatorSock.frames)).not.toContain(taskId);
   });
 });
 
@@ -712,8 +764,8 @@ describe("legitimate flows are unchanged", () => {
     const delegator = await newAgent(relayA);
     const target = await newAgent(relayB);
     const decoy = await newAgent(relayB);
-    await list(relayB, target);
-    await list(relayB, decoy);
+    await list(relayB, target, { endpoint: "http://127.0.0.1:1/mcp" });
+    await list(relayB, decoy, { endpoint: "http://127.0.0.1:1/mcp" });
     const targetSock = fakeSocket(relayB, target.motebitId);
     const decoySock = fakeSocket(relayB, decoy.motebitId);
 
