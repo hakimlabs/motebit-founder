@@ -31,7 +31,15 @@ import { evaluateSettlementEligibility } from "./task-routing.js";
 import { REFERENCE_MIN_BONDED_SIGNAL_MICRO } from "./bond-store.js";
 import { ON_SHELF, delistRegistration } from "./registry-delist.js";
 import { hasRevocationRecord, liftRevocation } from "./identity-revocation.js";
-import { GuardianNotProvenError, GuardianUnprovableError } from "./errors.js";
+import {
+  GuardianNotProvenError,
+  GuardianRecoverySuspendedError,
+  GuardianUnprovableError,
+} from "./errors.js";
+import {
+  GUARDIAN_RECOVERY_SUSPENDED_REASON,
+  guardianRecoverySuspended,
+} from "./guardian-recovery-containment.js";
 import {
   admitKey,
   guardianEvidencePossible,
@@ -1290,6 +1298,27 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       metadata?: { name?: string; description?: string };
       public_key?: string;
     }>();
+    // P0 CONTAINMENT (`guardian-recovery-containment.ts`): a registration
+    // carrying a guardian-recovery succession is refused here, before any
+    // identity, guardian or key read and any registry/identity write — this
+    // door applies a recovery through the same writer as `/rotate-key`. The
+    // one write is the refusal's auth-event row (rule 6). A registration
+    // with no succession, or an ordinary one, never enters this branch.
+    if (guardianRecoverySuspended((body as Record<string, unknown> | null)?.succession)) {
+      logger.warn("agent.key.succession_refused", {
+        caller: callerMotebitId ?? null,
+        reason: GUARDIAN_RECOVERY_SUSPENDED_REASON,
+      });
+      deps.recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId ?? null,
+        reason: `succession:${GUARDIAN_RECOVERY_SUSPENDED_REASON}`,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new GuardianRecoverySuspendedError();
+    }
     const motebitId = callerMotebitId ?? body.motebit_id;
     if (!motebitId || typeof motebitId !== "string") {
       throw new HTTPException(400, { message: "Missing motebit_id" });
