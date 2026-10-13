@@ -137,6 +137,26 @@ fly ssh sftp get /data/motebit-backup-YYYYMMDD.db -a motebit-sync
 
 ## 3. Service Deployment
 
+### receipt.computer (`apps/verify/`)
+
+receipt.computer is the public verifier, so what it serves must be the exact build that was reviewed. The Vercel project `receipt-computer` is **deliberately not connected to Git**. A Git connection rebuilds from source on Vercel's side and would make every push to `main` a production deploy, using the project's Vite preset at the repo root.
+
+Production changes only by founder approval of an exact artifact:
+
+1. **Build and check.** From a fully clean worktree at the reviewed commit, on Node 22:
+   ```bash
+   scripts/stage-receipt-computer.sh --expect <reviewed-manifest.txt> --commit <reviewed-sha> --deploy
+   ```
+   - The script refuses to deploy unless `apps/verify/dist` matches the reviewed sha256 manifest exactly.
+   - It uploads a prebuilt Build Output directory, so Vercel runs no install or build and injects no build-time env.
+   - The local build is the one that could embed env, so the script runs it with every `VITE_*` variable unset, and refuses to run if any `apps/verify/.env*` file exists.
+   - `--skip-domain` leaves receipt.computer unchanged.
+2. **Verify the staged URL.**
+   - `scripts/stage-receipt-computer.sh --verify <url> <manifest>` re-hashes the served files. Vercel's security checkpoint can answer automated clients with 403; check in a browser if so.
+   - Then open the page and check the sample and the Tamper button.
+3. **Promote** (a separate founder go): `vercel promote <url> --scope motebit`. Then re-run `--verify https://receipt.computer <manifest>`.
+4. **Rollback:** `vercel promote <previous production deployment> --scope motebit`.
+
 ### Web Search (`services/web-search/`)
 
 ```bash
