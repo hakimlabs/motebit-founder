@@ -1003,9 +1003,12 @@ export interface KeyBindingResult {
     activeUntil?: number;
     // (undocumented)
     bound: boolean;
+    genesisCommitment?: boolean;
     genesisPublicKey?: string;
+    guardianAuthority?: "not_required" | "caller_trusted" | "not_established";
     reason?: string;
     sovereign?: boolean;
+    successionIntegrity?: boolean;
 }
 
 // @public
@@ -2283,7 +2286,7 @@ export function verifyHostRoster(input: {
 }): Promise<HostRosterResult>;
 
 // @public
-export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
+export function verifyIdentityBindingAnchored(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, proof: IdentityLogInclusionProof, trustedGuardianPublicKeyHex?: string): Promise<KeyBindingResult>;
 
 // @public
 export function verifyInvoice(invoice: InvoiceV1, registeredIssuerKeyHex: string, options?: {
@@ -2294,7 +2297,7 @@ export function verifyInvoice(invoice: InvoiceV1, registeredIssuerKeyHex: string
 }): Promise<InvoiceVerdict>;
 
 // @public
-export function verifyKeyBindingAtTime(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, guardianPublicKeyHex?: string): Promise<KeyBindingResult>;
+export function verifyKeyBindingAtTime(identity: MotebitIdentityFile, signingKeyHex: string, atTimestampMs: number, trustedGuardianPublicKeyHex?: string): Promise<KeyBindingResult>;
 
 // @public
 export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicKeyHex?: string): Promise<boolean>;
@@ -2303,7 +2306,7 @@ export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicK
 export function verifyMerkleInclusion(leaf: string, index: number, siblings: string[], layerSizes: number[], expectedRoot: string, treeHashVersion?: MerkleTreeVersion): Promise<boolean>;
 
 // @public
-export function verifyMigratingKeyBinding(motebitId: string, presentedKeyHex: string, identityFile?: MotebitIdentityFile): Promise<boolean>;
+export function verifyMigratingKeyBinding(motebitId: string, presentedKeyHex: string, identityFile?: MotebitIdentityFile, trustedGuardianPublicKeyHex?: string): Promise<boolean>;
 
 // @public
 export function verifyMigrationPresentation(presentation: MigrationPresentation, publicKey: Uint8Array): Promise<boolean>;

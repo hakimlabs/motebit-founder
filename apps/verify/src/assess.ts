@@ -8,7 +8,8 @@
  * Identity binding is decided from the page's OWN evidence (`BindingEvidence`),
  * not from the verifier's `binding: "sovereign"` — that one value covers both
  * the receipt-alone commitment and the time-windowed succession path, and the
- * latter trusts a guardian named inside the served file (`served-chain.ts`):
+ * page binds a served chain only through its own canonical-form and
+ * root checks (`served-chain.ts`):
  *
  *   1. The relay-served chain binds the signing key at the receipt's CLAIMED
  *      time (checked by the page with no guardian link honoured, for an

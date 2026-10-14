@@ -3,8 +3,10 @@
  * behind the PINNED rung and behind every sentence about how the signing key
  * relates to the motebit_id. `assess.ts` reads this, never the verifier's
  * `binding: "sovereign"`, because that one value covers two different checks
- * (the receipt-alone commitment and the time-windowed succession path) and the
- * second trusts a guardian key named inside the very file it is verifying.
+ * (the receipt-alone commitment and the time-windowed succession path), and
+ * the page adds checks of its own (canonical id and key, chain root) that the
+ * library does not make. The library no longer honours a guardian named only
+ * by the file it verifies; the page strips that guardian anyway.
  *
  * Two rules, both fail-closed:
  *

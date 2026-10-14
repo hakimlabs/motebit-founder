@@ -94,15 +94,18 @@ describe("checkServedChain", () => {
     expect(await checkServedChain(r(D4A), identityOf(D4A_CTX))).toEqual({ kind: "not_active" });
   });
 
-  it("a guardian named only inside the served file never binds — though the library alone would", async () => {
+  it("a guardian named only inside the served file never binds — and the library agrees", async () => {
     for (const [rec, ctx] of [
       [FG, FG_CTX],
       [FGL, FGL_CTX],
     ] as const) {
       const id = identityOf(ctx);
-      // The hazard this module exists for: the library honours the file's guardian.
+      // The library no longer honours a guardian named only by the file it is
+      // verifying (@motebit/crypto: a file-named guardian is never a trust root),
+      // so the hazard this module was built against is closed at the source too.
       const lib = await verifyKeyBindingAtTime(id, r(rec).public_key, r(rec).completed_at);
-      expect(lib.bound).toBe(true);
+      expect(lib.bound).toBe(false);
+      expect(lib.guardianAuthority).toBe("not_established");
       expect(await checkServedChain(r(rec), id)).toEqual({ kind: "recovery_unverifiable" });
     }
   });
