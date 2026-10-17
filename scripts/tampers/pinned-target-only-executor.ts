@@ -28,6 +28,8 @@ interface Edit {
 interface Tamper {
   name: string;
   edits: Edit[];
+  /** The package the test runs in (default: the relay). */
+  pkg?: string;
   test: string;
   /** `-t` filter: the cell that must go red. */
   filter: string;
@@ -164,11 +166,72 @@ const TAMPERS: Tamper[] = [
     test: ROUTES,
     filter: "neither presented nor granted",
   },
+  {
+    name: "A2A bridge: the addressed agent is not named (no target_agent), so the label leaves it unpinned",
+    edits: [
+      {
+        file: "services/relay/src/a2a-bridge.ts",
+        find: "        target_agent: motebitId,\n      };",
+        replace: "      };",
+      },
+    ],
+    test: ROUTES,
+    filter: "A2A bridge",
+  },
+  {
+    name: "AP2 bridge: the addressed agent is not named (no target_agent)",
+    edits: [
+      {
+        file: "services/relay/src/a2a-bridge.ts",
+        find: "      target_agent: motebitId,\n    };",
+        replace: "    };",
+      },
+    ],
+    test: ROUTES,
+    filter: "AP2 bridge",
+  },
+  {
+    name: "F2 executor relay: an inbound forward is not pinned to the agent it names",
+    edits: [
+      {
+        file: "services/relay/src/federation-callbacks.ts",
+        find: "          pinned_executor: verified.targetAgent,\n",
+        replace: "",
+      },
+    ],
+    test: ROUTES,
+    filter: "not_pinned_executor",
+  },
+  {
+    name: "F3 grantForward: the relay's MCP forward takes a pinned task for a non-target",
+    edits: [
+      {
+        file: "services/relay/src/task-claim.ts",
+        find: "    if (pinRefusesClaim(entry, workerId)) {",
+        replace: "    if (false as boolean) {",
+      },
+    ],
+    test: DOORS,
+    filter: "refused to a non-target worker",
+  },
+  {
+    name: "CLI delegate --target: the target is addressed but not named (no target_agent)",
+    edits: [
+      {
+        file: "apps/cli/src/subcommands/delegate.ts",
+        find: "        target_agent: targetMotebitId,\n",
+        replace: "",
+      },
+    ],
+    pkg: "apps/cli",
+    test: "src/__tests__/money-flows.test.ts",
+    filter: "uses --target to skip discovery",
+  },
 ];
 
-function run(args: string[]): boolean {
+function run(pkg: string, args: string[]): boolean {
   try {
-    execFileSync("npx", args, { cwd: path.join(ROOT, PKG), stdio: "ignore" });
+    execFileSync("npx", args, { cwd: path.join(ROOT, pkg), stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -200,7 +263,7 @@ for (const t of TAMPERS) {
   }
   for (const [abs, text] of current) writeFileSync(abs, text);
   try {
-    if (run(["vitest", "run", t.test, "-t", t.filter])) {
+    if (run(t.pkg ?? PKG, ["vitest", "run", t.test, "-t", t.filter])) {
       console.error(`GREEN  ${t.name}: ${t.test} [${t.filter}] still passes with the fix removed`);
       failures++;
     } else {

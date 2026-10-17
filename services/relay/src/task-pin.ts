@@ -26,6 +26,17 @@
  * (an operator's master-token submission naming only the path agent, or a
  * label). There the relay chooses the worker, exactly as before.
  *
+ * OPEN (#1112 F1): with no verified caller (the master token) the pin rests
+ * on `isKnownIdentity(submitted_by)`, so a master-token client that
+ * addresses an offline agent naming an unknown submitter and no
+ * `target_agent` is unpinned. The first-party addressed doors therefore NAME
+ * their target in `target_agent` (`motebit delegate`, the A2A and AP2
+ * bridges), which pins whatever token carries the request. Pinning every
+ * submission whose submitter is not provably the path agent would also pin
+ * the planner's documented master-token flow (`"plan_engine"` to its own
+ * path) and an operator's no-submitter capability routing — held for a
+ * decision, not taken here.
+ *
  * The pin is stamped on the queue entry at admission (`pinned_executor`) and
  * read through these predicates at EVERY place an executor is chosen or
  * accepted — candidate selection (ranked and fallback), presentation, claim,

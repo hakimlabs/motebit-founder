@@ -810,4 +810,273 @@ describe("legitimate flows are unchanged", () => {
     expect(res.status).toBe(201);
     expect(await waitFor(() => workerMcp.requests.length > 0)).toBe(true);
   });
+
+  it("the planner's master-token label (plan_engine, own path) still uses capability routing", async () => {
+    const relay = await newRelay();
+    const owner = await newAgent(relay);
+    const worker = await newAgent(relay);
+    const workerMcp = await recordingServer();
+    await list(relay, worker, { endpoint: workerMcp.url });
+    trust(relay, [owner.motebitId], worker.motebitId);
+
+    const res = await relay.app.request(`/agent/${owner.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "plan step",
+        submitted_by: "plan_engine",
+        required_capabilities: [CAP],
+      }),
+    });
+    expect(res.status).toBe(201);
+    expect(await waitFor(() => workerMcp.requests.length > 0)).toBe(true);
+  });
+
+  it("a signed caller posting to its OWN path still uses capability routing", async () => {
+    const relay = await newRelay();
+    const delegator = await newAgent(relay);
+    const worker = await newAgent(relay);
+    const workerMcp = await recordingServer();
+    await list(relay, worker, { endpoint: workerMcp.url });
+    trust(relay, [delegator.motebitId], worker.motebitId);
+
+    const { status, body } = await submitSigned(relay, delegator, delegator.motebitId);
+    expect(status).toBe(201);
+    expect(await waitFor(() => workerMcp.requests.length > 0)).toBe(true);
+    expect(routesOf(relay, body.task_id as string)).toContain(worker.motebitId);
+    expect(new TaskQueue(relay.moteDb.db).get(body.task_id as string)?.pinned_executor).toBe(
+      undefined,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1112 F1 — the pin never depends on whether the relay knows `submitted_by`
+// ---------------------------------------------------------------------------
+
+/** A signed `task:submit` token for `agent` (the CLI's no-master-token path). */
+async function submitSigned(
+  relay: SyncRelay,
+  agent: Agent,
+  pathAgentId: string,
+  extra: Record<string, unknown> = {},
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const token = (
+    await mintAudienceToken(
+      { mid: agent.motebitId, did: agent.deviceId, aud: "task:submit" },
+      agent.kp.privateKey,
+    )
+  ).token;
+  const res = await relay.app.request(`/agent/${pathAgentId}/task`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "Idempotency-Key": crypto.randomUUID(),
+    },
+    body: JSON.stringify({
+      prompt: `push test ${crypto.randomUUID()}`,
+      submitted_by: agent.motebitId,
+      required_capabilities: [CAP],
+      ...extra,
+    }),
+  });
+  return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+/** The target offline, a ranked HTTP-MCP decoy: what main sent the task to. */
+async function offlineTargetWithDecoy(relay: SyncRelay, trustFrom: string[] = []) {
+  const target = await newAgent(relay);
+  const decoy = await newAgent(relay);
+  const decoyMcp = await recordingServer();
+  await list(relay, decoy, { endpoint: decoyMcp.url });
+  trust(relay, [...trustFrom, target.motebitId], decoy.motebitId);
+  return { target, decoy, decoyMcp };
+}
+
+async function expectPinnedToTarget(
+  relay: SyncRelay,
+  taskId: string,
+  target: Agent,
+  decoy: Agent,
+  decoyMcp: { requests: string[] },
+): Promise<void> {
+  await sleep(600);
+  expect(decoyMcp.requests).toEqual([]);
+  expect(routesOf(relay, taskId)).not.toContain(decoy.motebitId);
+  const entry = new TaskQueue(relay.moteDb.db).get(taskId);
+  expect(entry?.pinned_executor).toBe(target.motebitId);
+  expect(entry?.task.status).toBe("pending");
+}
+
+describe("an addressed submission is pinned on every client path (#1112 F1)", () => {
+  it("signed caller token (the CLI without a master token): pinned to the path agent", async () => {
+    const relay = await newRelay();
+    const delegator = await newAgent(relay);
+    const { target, decoy, decoyMcp } = await offlineTargetWithDecoy(relay, [delegator.motebitId]);
+
+    const { status, body } = await submitSigned(relay, delegator, target.motebitId);
+    expect(status).toBe(201);
+    await expectPinnedToTarget(relay, body.task_id as string, target, decoy, decoyMcp);
+  });
+
+  it("signed caller token asserting submitted_by = the path agent: still pinned (the assertion is never read)", async () => {
+    const relay = await newRelay();
+    const delegator = await newAgent(relay);
+    const { target, decoy, decoyMcp } = await offlineTargetWithDecoy(relay, [delegator.motebitId]);
+
+    const { status, body } = await submitSigned(relay, delegator, target.motebitId, {
+      submitted_by: target.motebitId,
+    });
+    expect(status).toBe(201);
+    await expectPinnedToTarget(relay, body.task_id as string, target, decoy, decoyMcp);
+  });
+
+  it("master token + a submitted_by the relay does NOT know, as the CLI now sends it (target_agent): pinned", async () => {
+    const relay = await newRelay();
+    const { target, decoy, decoyMcp } = await offlineTargetWithDecoy(relay);
+    // A CLI whose identity this relay never registered, using MOTEBIT_API_TOKEN
+    // (`getRelayAuthHeaders` prefers the master token): `motebit delegate
+    // --target` names the target as well as addressing it.
+    const unknownDelegator = `unknown-${crypto.randomUUID()}`;
+
+    const { status, body } = await submitPinned(relay, unknownDelegator, target.motebitId, {
+      target_agent: target.motebitId,
+    });
+    expect(status).toBe(201);
+    await expectPinnedToTarget(relay, body.task_id as string, target, decoy, decoyMcp);
+  });
+
+  // OPEN (#1112 F1, held for a decision): with no verified caller the relay
+  // still reads the pin from `isKnownIdentity(submitted_by)`, so a
+  // master-token client that addresses an offline target WITHOUT naming it
+  // in `target_agent` and names an unknown submitter is unpinned and ranked.
+  // Closing it at the relay pins the planner's documented master-token flow
+  // (`submitted_by: "plan_engine"` to its own path) and an operator's
+  // no-submitter capability routing — see the report on this branch.
+  it.todo("master token + an unknown submitted_by with no target_agent is pinned");
+
+  it("A2A bridge (master token, submitted_by a2a:<caller>): pinned to the addressed agent", async () => {
+    const base = "http://relay-a2a.test:3000";
+    const relay = await newRelay({
+      federation: { endpointUrl: base, displayName: "A2A" },
+    });
+    installFederationFetch({ [base]: relay });
+    const { target, decoy, decoyMcp } = await offlineTargetWithDecoy(relay);
+
+    const res = await relay.app.request(`/a2a/agents/${target.motebitId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        message: { role: "user", parts: [{ text: "push test" }] },
+        metadata: { caller_id: "external-agent", required_capabilities: [CAP] },
+      }),
+    });
+    expect(res.status).toBeLessThan(300);
+    const taskId = ((await res.json()) as { id: string }).id;
+    expect(new TaskQueue(relay.moteDb.db).get(taskId)?.submitted_by).toBe("a2a:external-agent");
+    await expectPinnedToTarget(relay, taskId, target, decoy, decoyMcp);
+  });
+
+  it("AP2 bridge (master token, submitted_by ap2:<signer>): pinned to the addressed agent", async () => {
+    const base = "http://relay-ap2.test:3000";
+    const relay = await newRelay({
+      federation: { endpointUrl: base, displayName: "AP2" },
+    });
+    installFederationFetch({ [base]: relay });
+    const { target, decoy, decoyMcp } = await offlineTargetWithDecoy(relay);
+
+    const res = await relay.app.request(`/ap2/agents/${target.motebitId}/mandate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        type: "intent_mandate",
+        intent: "push test",
+        signer: "external-signer",
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    expect(res.status).toBeLessThan(300);
+    const taskId = (
+      new TaskQueue(relay.moteDb.db).values().next().value as { task: { task_id: string } }
+    ).task.task_id;
+    expect(new TaskQueue(relay.moteDb.db).get(taskId)?.submitted_by).toBe("ap2:external-signer");
+    await expectPinnedToTarget(relay, taskId, target, decoy, decoyMcp);
+  });
+
+  it("master token + submitted_by = the path agent (the operator's own capability routing) is unpinned", async () => {
+    const relay = await newRelay();
+    const delegator = await newAgent(relay);
+    const worker = await newAgent(relay);
+    const workerMcp = await recordingServer();
+    await list(relay, worker, { endpoint: workerMcp.url });
+    trust(relay, [delegator.motebitId], worker.motebitId);
+
+    const { status, body } = await submitUnpinned(relay, delegator.motebitId);
+    expect(status).toBe(201);
+    expect(await waitFor(() => workerMcp.requests.length > 0)).toBe(true);
+    expect(new TaskQueue(relay.moteDb.db).get(body.task_id as string)?.pinned_executor).toBe(
+      undefined,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1112 F2 — the executor relay pins an inbound forward to the agent it names
+// ---------------------------------------------------------------------------
+
+describe("an inbound federated forward is answered only by the agent it names", () => {
+  it("a non-target signer is refused (not_pinned_executor) even with a route on record", async () => {
+    const relayA = await newRelay({
+      enableDeviceAuth: false,
+      federation: { endpointUrl: "http://relay-a.test:3000", displayName: "A" },
+    });
+    const relayB = await newRelay({
+      enableDeviceAuth: false,
+      federation: { endpointUrl: "http://relay-b.test:3001", displayName: "B" },
+    });
+    installFederationFetch({
+      "http://relay-a.test:3000": relayA,
+      "http://relay-b.test:3001": relayB,
+    });
+    await establishPeering(relayA, "http://relay-a.test:3000", relayB, "http://relay-b.test:3001");
+    const idA = (await (await relayA.app.request("/federation/v1/identity")).json()) as {
+      relay_motebit_id: string;
+    };
+
+    const delegator = await newAgent(relayA);
+    const target = await newAgent(relayB);
+    const decoy = await newAgent(relayB);
+    await list(relayB, target, { endpoint: "http://127.0.0.1:1/mcp" });
+    const targetSock = fakeSocket(relayB, target.motebitId);
+
+    const { status, body } = await submitPinned(relayA, delegator.motebitId, target.motebitId);
+    expect(status).toBe(201);
+    const taskId = body.task_id as string;
+    expect(await waitFor(() => taskRequestsIn(targetSock.frames).includes(taskId))).toBe(true);
+    const forwarded = new TaskQueue(relayB.moteDb.db).get(taskId);
+    expect(forwarded?.origin_relay).toBe(idA.relay_motebit_id);
+
+    // The route check bypassed: a route of the entry's own origin names the
+    // decoy, so only the pin stands between its receipt and the answer.
+    recordTaskRoute(
+      relayB.moteDb.db,
+      taskId,
+      decoy.motebitId,
+      "",
+      "inbound_forward",
+      idA.relay_motebit_id,
+    );
+    const res = await relayB.app.request(`/agent/${target.motebitId}/task/${taskId}/result`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(await signedReceiptBy(decoy, taskId, forwarded!.task.prompt)),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(await res.json())).toContain("pinned to");
+    expect(new TaskQueue(relayB.moteDb.db).get(taskId)?.receipt?.motebit_id).not.toBe(
+      decoy.motebitId,
+    );
+    expect(new TaskQueue(relayB.moteDb.db).get(taskId)?.pinned_executor).toBe(target.motebitId);
+  });
 });

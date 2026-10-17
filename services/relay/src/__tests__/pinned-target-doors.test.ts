@@ -20,6 +20,9 @@ import type { SyncRelay } from "../index.js";
 import { recordTaskRoute } from "../task-routing.js";
 import { TaskQueue } from "../task-queue.js";
 import { candidatesUnderPin, executorAllowed, pinnedSelection, taskPinOf } from "../task-pin.js";
+import { TaskClaims } from "../task-claim.js";
+import type { TaskQueueEntry } from "../tasks.js";
+import { AgentTaskStatus } from "@motebit/sdk";
 import { JSON_AUTH, createAgent, createTestRelay, seedX402PaidTask } from "./test-helpers.js";
 
 // The answer door, bypassed: only settlement attribution stands between a
@@ -65,6 +68,40 @@ describe("taskPinOf — how a pin is read from a submission", () => {
     ],
   ] as const)("%s", (_name, input, expected) => {
     expect(taskPinOf(input)).toBe(expected);
+  });
+});
+
+describe("grantForward — the relay's MCP forward takes a pinned task only for its target", () => {
+  it("refused to a non-target worker (the claim door's predicate); granted to the target", () => {
+    const taskQueue = new Map<string, TaskQueueEntry>();
+    const entry = {
+      task: { task_id: "t1", motebit_id: "T", status: AgentTaskStatus.Pending },
+      pinned_executor: "T",
+    } as unknown as TaskQueueEntry;
+    taskQueue.set("t1", entry);
+    const claims = new TaskClaims({
+      taskQueue,
+      connections: new Map(),
+      logger: { info: () => {} },
+    });
+
+    expect(claims.grantForward("t1", "DECOY")).toBe(false);
+    expect(taskQueue.get("t1")!.task.status).toBe(AgentTaskStatus.Pending);
+    expect(claims.grantForward("t1", "T")).toBe(true);
+    expect(taskQueue.get("t1")!.task.claimed_by).toBe("mcp:T");
+  });
+
+  it("an unpinned task is granted to whichever worker routing chose", () => {
+    const taskQueue = new Map<string, TaskQueueEntry>();
+    taskQueue.set("t2", {
+      task: { task_id: "t2", motebit_id: "P", status: AgentTaskStatus.Pending },
+    } as unknown as TaskQueueEntry);
+    const claims = new TaskClaims({
+      taskQueue,
+      connections: new Map(),
+      logger: { info: () => {} },
+    });
+    expect(claims.grantForward("t2", "ANY")).toBe(true);
   });
 });
 
