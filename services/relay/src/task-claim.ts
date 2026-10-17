@@ -276,7 +276,7 @@ export class TaskClaims {
    * holds it, or it was answered — and then the forward must not be sent.
    */
   grantForward(taskId: string, workerId: string): boolean {
-    const { taskQueue } = this.deps;
+    const { taskQueue, logger } = this.deps;
     const entry = taskQueue.get(taskId);
     if (
       entry == null ||
@@ -284,6 +284,16 @@ export class TaskClaims {
       entry.receipt != null ||
       entry.expired_unclaimed != null
     ) {
+      return false;
+    }
+    // A pinned task is forwarded to its target or to no one (task-pin.ts) —
+    // the same predicate the claim door reads, so no routing phase that
+    // picked another worker can take the grant for it.
+    if (pinRefusesClaim(entry, workerId)) {
+      logger.info("task.forward_refused_not_pinned_executor", {
+        correlationId: taskId,
+        worker: workerId,
+      });
       return false;
     }
     entry.task.status = AgentTaskStatus.Claimed;
