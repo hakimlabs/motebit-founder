@@ -1,5 +1,21 @@
 # @motebit/verify
 
+## 1.9.1
+
+_1.9.0 is reserved by the pending main release train, so this security release takes 1.9.1._
+
+### Patch Changes
+
+- Updated dependencies [17a81e5]
+- Updated dependencies [3e9f65f]
+  - @motebit/crypto@4.0.0
+  - @motebit/state-export-client@0.7.0
+  - @motebit/crypto-android-keystore@1.1.38
+  - @motebit/crypto-appattest@1.0.40
+  - @motebit/crypto-tpm@1.1.39
+  - @motebit/crypto-webauthn@1.0.40
+  - @motebit/verifier@1.14.1
+
 ## 1.8.18
 
 ### Patch Changes

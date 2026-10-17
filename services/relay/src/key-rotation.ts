@@ -35,7 +35,11 @@ import {
   identityKey,
   verificationKeyFor,
 } from "./identity-keys.js";
-import { GuardianNotProvenError } from "./errors.js";
+import { GuardianNotProvenError, GuardianRecoverySuspendedError } from "./errors.js";
+import {
+  GUARDIAN_RECOVERY_SUSPENDED_REASON,
+  guardianRecoverySuspended,
+} from "./guardian-recovery-containment.js";
 import { isKnownIdentity, recordIdentityRevocation } from "./identity-revocation.js";
 import { bindCaller, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
@@ -185,6 +189,17 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     };
 
     const body = await c.req.json<KeySuccessionRecord>();
+
+    // P0 CONTAINMENT (`guardian-recovery-containment.ts`): a guardian
+    // recovery is refused here, the first thing after reading the body —
+    // before the caller check, any guardian or key read, and any identity
+    // write. The one write is the refusal's auth-event row (rule 6): an
+    // attempted recovery while suspended is exactly what the operator's
+    // record exists to show. An ordinary rotation never enters this branch.
+    if (guardianRecoverySuspended(body)) {
+      recordRefusal(GUARDIAN_RECOVERY_SUSPENDED_REASON);
+      throw new GuardianRecoverySuspendedError();
+    }
 
     // An ORDINARY succession is the identity's own act. The signed payload
     // names two keys and no motebit_id, so the record cannot say whose

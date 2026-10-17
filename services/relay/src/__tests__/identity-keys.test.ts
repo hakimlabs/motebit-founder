@@ -30,6 +30,7 @@ import type { SyncRelay } from "../index.js";
 import {
   IDENTITY_KEYS_BACKFILL_SQL,
   admitKey,
+  guardianProvenance,
   identityGuardianFor,
   identityKey,
   keysHeldBy,
@@ -476,7 +477,12 @@ describe("identity-keys", () => {
       expect((await registerAsOperator("kl-dis", { public_key: "zz" })).status).toBe(400);
     });
 
-    it("E-op — the operator registering a bare service identity fills it; its guardian recovers only once the identity key re-sets it", async () => {
+    // P0 containment (guardian-recovery-containment.ts): every guardian
+    // recovery is refused 503 before any guardian read, so the recoveries in
+    // these cases assert 503, an unchanged holder, and the provenance verdict
+    // the route would apply once re-enabled (`guardianProvenance`). Restore
+    // the route-level assertions with the gate (git show this commit).
+    it("[recovery suspended] E-op — the operator registering a bare service identity fills it; its guardian is proven only once the identity key re-sets it (recovery 503 throughout)", async () => {
       const k1 = await generateKeypair();
       const g = await generateKeypair();
       expect(
@@ -501,7 +507,8 @@ describe("identity-keys", () => {
       );
       // The master token proves no key of the identity's (D3): the guardian it
       // set is unproven, and authorizes no recovery.
-      expect(await presentRotation("svc-1", recovery)).toBe(403);
+      expect(await presentRotation("svc-1", recovery)).toBe(503);
+      expect(guardianProvenance(db, "svc-1")).toEqual({ guardian: hex(g), proven: false });
       expect(identityKey(db, "svc-1")?.publicKey).toBe(hex(k1));
       // The identity key re-sets it (a device on the held key signs as the identity).
       expect(await registerSelf("svc-1", "svc-1-dev", k1)).toBe(201);
@@ -513,11 +520,12 @@ describe("identity-keys", () => {
           })
         ).status,
       ).toBe(200);
-      expect(await presentRotation("svc-1", recovery)).toBe(200);
-      expect(identityKey(db, "svc-1")?.publicKey).toBe(hex(k2));
+      expect(guardianProvenance(db, "svc-1")).toEqual({ guardian: hex(g), proven: true });
+      expect(await presentRotation("svc-1", recovery)).toBe(503);
+      expect(identityKey(db, "svc-1")?.publicKey).toBe(hex(k1));
     });
 
-    it("R1/DA6 — every verified attestation reaches the holder, with or without a key; the replaced guardian cannot recover", async () => {
+    it("[recovery suspended] R1/DA6 — every verified attestation reaches the holder, with or without a key; the replaced guardian is never the proven one (recovery 503 throughout)", async () => {
       const k1 = await generateKeypair();
       const g1 = await generateKeypair();
       const g2 = await generateKeypair();
@@ -547,8 +555,9 @@ describe("identity-keys", () => {
         k2.publicKey,
       );
       // Operator-set guardians are unproven (D3): neither recovers.
-      expect(await presentRotation("svc-g", stale)).toBe(403);
-      expect(await presentRotation("svc-g", fresh)).toBe(403);
+      expect(await presentRotation("svc-g", stale)).toBe(503);
+      expect(await presentRotation("svc-g", fresh)).toBe(503);
+      expect(guardianProvenance(db, "svc-g")).toEqual({ guardian: hex(g2), proven: false });
       // Proven by the identity key, the replaced guardian still cannot recover.
       expect(await registerSelf("svc-g", "svc-g-dev", k1)).toBe(201);
       expect(
@@ -559,8 +568,11 @@ describe("identity-keys", () => {
           })
         ).status,
       ).toBe(200);
-      expect(await presentRotation("svc-g", stale)).toBe(400);
-      expect(await presentRotation("svc-g", fresh)).toBe(200);
+      // Would be: stale 400 (signed by a guardian not on file), fresh 200.
+      expect(guardianProvenance(db, "svc-g")).toEqual({ guardian: hex(g2), proven: true });
+      expect(await presentRotation("svc-g", stale)).toBe(503);
+      expect(await presentRotation("svc-g", fresh)).toBe(503);
+      expect(identityKey(db, "svc-g")?.publicKey).toBe(hex(k1));
     });
 
     it("DB4 — a non-canonical guardian is refused before any write", async () => {
@@ -659,7 +671,7 @@ describe("identity-keys", () => {
   });
 
   describe("#753 decisive round — build 4's departure is main's rule when unfilled", () => {
-    it("C1 — a chain-only identity (registry '' or absent) still departs from its chain head; its backfilled guardian is unproven (D2)", async () => {
+    it("[recovery suspended] C1 — a chain-only identity (registry '' or absent) still departs from its chain head; its backfilled guardian is unproven (D2)", async () => {
       const k = await generateKeypair();
       const k1 = await generateKeypair();
       const g = await generateKeypair();
@@ -676,8 +688,10 @@ describe("identity-keys", () => {
         n.publicKey,
       );
       // No held key, so no request ever proved the identity's current key
-      // when the guardian was set: the recovery is refused (GUARDIAN_NOT_PROVEN).
-      expect(await presentRotation("c1", rec)).toBe(403);
+      // when the guardian was set: the recovery would be refused
+      // (GUARDIAN_NOT_PROVEN). Suspended, it is 503 before that read.
+      expect(guardianProvenance(db, "c1")).toEqual({ guardian: hex(g), proven: false });
+      expect(await presentRotation("c1", rec)).toBe(503);
       // An ordinary rotation still departs from the chain head, as on main.
       expect(
         await presentAsOperator(
@@ -687,7 +701,7 @@ describe("identity-keys", () => {
       ).toBe(200);
     });
 
-    it("C2 — an operator identity WITH a device row departs from its registry key; its operator-set guardian is unproven (D3)", async () => {
+    it("[recovery suspended] C2 — an operator identity WITH a device row departs from its registry key; its operator-set guardian is unproven (D3)", async () => {
       const k = await generateKeypair();
       const g = await generateKeypair();
       plantDevice(db, "c2", "c2-dev", "");
@@ -712,7 +726,8 @@ describe("identity-keys", () => {
         k.publicKey,
         n.publicKey,
       );
-      expect(await presentRotation("c2", rec)).toBe(403);
+      expect(guardianProvenance(db, "c2")).toEqual({ guardian: hex(g), proven: false });
+      expect(await presentRotation("c2", rec)).toBe(503);
       expect(
         await presentAsOperator(
           "c2",

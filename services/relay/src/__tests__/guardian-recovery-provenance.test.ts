@@ -42,7 +42,12 @@ import {
 import type { KeyPair, KeySuccessionRecord } from "@motebit/crypto";
 import type { TokenAudience } from "@motebit/protocol";
 import { createTestRelay, AUTH_HEADER } from "./test-helpers.js";
-import { IDENTITY_KEYS_BACKFILL_SQL } from "../identity-keys.js";
+import {
+  IDENTITY_KEYS_BACKFILL_SQL,
+  guardianEvidencePossible,
+  guardianProvenance,
+} from "../identity-keys.js";
+import { GuardianNotProvenError } from "../errors.js";
 
 let relay: SyncRelay;
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -220,6 +225,28 @@ const guardianOnFile = (mid: string): string | null =>
       .get(mid) as { guardian_public_key: string | null } | undefined
   )?.guardian_public_key ?? null;
 
+// ── P0 containment (guardian-recovery-containment.ts, GUARDIAN_RECOVERY_ENABLED = false) ──
+//
+// Every guardian recovery is refused 503 GUARDIAN_RECOVERY_SUSPENDED before
+// the route reads a guardian, at both doors. The cases below keep their
+// setup and assert, in place of the route's verdict, (a) the 503 and an
+// unchanged identity, and (b) the PROVENANCE verdict the route would apply
+// once recovery is re-enabled (`guardianProvenance`, and the refusal's wording
+// from `GuardianNotProvenError` + `guardianEvidencePossible`). Titles carry
+// `[recovery suspended]`. Restore the route-level assertions with the gate
+// (git show this commit for the originals).
+
+function expectSuspended(res: { status: number; body: unknown }): void {
+  expect(res.status).toBe(503);
+  expect((res.body as { code?: string } | null)?.code).toBe("GUARDIAN_RECOVERY_SUSPENDED");
+}
+const provenanceOf = (mid: string): { guardian: string | null; proven: boolean } =>
+  guardianProvenance(relay.moteDb.db, mid);
+/** The GUARDIAN_NOT_PROVEN wording the route would answer for this identity. */
+const notProvenWording = (mid: string): string =>
+  new GuardianNotProvenError(guardianEvidencePossible(relay.moteDb.db, mid) ? "provable" : "legacy")
+    .message;
+
 // ── Setters: each returns the identity, its current key, and the guardian it set ──
 
 interface Planted {
@@ -388,7 +415,7 @@ describe("guardian recovery is accepted IFF the guardian was set with provenance
     for (const kind of def.kinds) {
       for (const signer of ["that guardian", "a different key"] as const) {
         const accept = def.proven && signer === "that guardian";
-        it(`${setter} × ${kind} × recovery by ${signer} → ${accept ? "200" : "refused"}`, async () => {
+        it(`[recovery suspended] ${setter} × ${kind} × recovery by ${signer} → 503 (would be ${accept ? "200" : "refused"})`, async () => {
           const p = await def.plant(kind);
           const next = await generateKeypair();
           const signingKey = signer === "that guardian" ? p.guardian : await generateKeypair();
@@ -400,22 +427,16 @@ describe("guardian recovery is accepted IFF the guardian was set with provenance
           );
           const keyBefore = servedKey(p.mid);
           const res = await rotateKey(p.mid, await stranger(), record);
-          if (accept) {
-            expect(res.status).toBe(200);
-            expect(servedKey(p.mid)).toBe(hex(next));
-            expect(successions(p.mid)).toBe(1);
-          } else {
-            expect(res.status).not.toBe(200);
-            if (!def.proven) {
-              // The guardian is refused for its provenance, before its signature is read.
-              expect(res.status).toBe(403);
-              expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
-            } else {
-              expect(res.status).toBe(400);
-            }
-            expect(servedKey(p.mid)).toBe(keyBefore);
-            expect(successions(p.mid)).toBe(0);
-          }
+          // Suspended: nothing moves, whatever the guardian or signer.
+          expectSuspended(res);
+          expect(servedKey(p.mid)).toBe(keyBefore);
+          expect(successions(p.mid)).toBe(0);
+          // The verdict the route applies once re-enabled: accepted IFF the
+          // guardian on file is proven AND signed the record.
+          const gp = provenanceOf(p.mid);
+          expect(gp.guardian).toBe(hex(p.guardian));
+          expect(gp.proven).toBe(def.proven);
+          expect(gp.proven && hex(signingKey) === gp.guardian).toBe(accept);
         });
       }
     }
@@ -423,7 +444,7 @@ describe("guardian recovery is accepted IFF the guardian was set with provenance
 });
 
 describe("the exact repro: a paired device plants its own guardian and takes the identity", () => {
-  it("paired-device token sets G it controls (200), then signGuardianRecoverySuccession(G, K0 → K_att) at /rotate-key is refused 403 GUARDIAN_NOT_PROVEN", async () => {
+  it("[recovery suspended] paired-device token sets G it controls (200), then signGuardianRecoverySuccession(G, K0 → K_att) at /rotate-key is refused 503 (would be 403 GUARDIAN_NOT_PROVEN)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -448,22 +469,22 @@ describe("the exact repro: a paired device plants its own guardian and takes the
       kAtt.publicKey,
     );
     const res = await rotateKey(mid, await bearer(mid, paired, kd, "rotate-key"), takeover);
-    expect(res.status).toBe(403);
-    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
-    expect(String(res.body?.error)).toMatch(/identity key/i);
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: false });
+    expect(notProvenWording(mid)).toMatch(/identity key/i);
     expect(servedKey(mid)).toBe(hex(k0));
     expect(registryKey(mid)).toBe(hex(k0));
     expect(successions(mid)).toBe(0);
     // The refusal is recorded under the presenter (rule 6).
     const ev = relay.moteDb.db
       .prepare(
-        "SELECT reason FROM relay_auth_events WHERE reason = 'succession:guardian_not_proven'",
+        "SELECT reason FROM relay_auth_events WHERE reason = 'succession:guardian_recovery_suspended'",
       )
       .all();
     expect(ev.length).toBe(1);
   });
 
-  it("the same attack through the register door's own recovery branch is refused too", async () => {
+  it("[recovery suspended] the same attack through the register door's own recovery branch is refused too (503)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -485,13 +506,19 @@ describe("the exact repro: a paired device plants its own guardian and takes the
       public_key: hex(kAtt),
       succession,
     });
-    expect(res.status).toBe(403);
-    expect((res.body as { code?: string } | null)?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: false });
     expect(servedKey(mid)).toBe(hex(k0));
     expect(successions(mid)).toBe(0);
+    const ev = relay.moteDb.db
+      .prepare(
+        "SELECT reason FROM relay_auth_events WHERE reason = 'succession:guardian_recovery_suspended'",
+      )
+      .all();
+    expect(ev.length).toBe(1);
   });
 
-  it("the register door's recovery branch accepts a proven guardian's record", async () => {
+  it("[recovery suspended] the register door's recovery branch refuses even a proven guardian's record (503; would be 200)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -515,11 +542,14 @@ describe("the exact repro: a paired device plants its own guardian and takes the
       public_key: hex(k1),
       succession,
     });
-    expect(res.status).toBe(200);
-    expect(servedKey(mid)).toBe(hex(k1));
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: true });
+    expect(servedKey(mid)).toBe(hex(k0));
+    expect(registryKey(mid)).toBe(hex(k0));
+    expect(successions(mid)).toBe(0);
   });
 
-  it("a guardian the owner replaced cannot be revived by a paired device replaying its old attestation", async () => {
+  it("[recovery suspended] a guardian the owner replaced cannot be revived by a paired device replaying its old attestation (503; would be 403)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -543,12 +573,12 @@ describe("the exact repro: a paired device plants its own guardian and takes the
       kAtt.publicKey,
     );
     const res = await rotateKey(mid, await stranger(), record);
-    expect(res.status).toBe(403);
-    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g1), proven: false });
     expect(servedKey(mid)).toBe(hex(k0));
   });
 
-  it("re-setting the guardian with the identity key restores recovery (the documented fix)", async () => {
+  it("[recovery suspended] re-setting the guardian with the identity key restores its provenance; the recovery is still 503 (would be 403, then 200)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -560,17 +590,20 @@ describe("the exact repro: a paired device plants its own guardian and takes the
     const k1 = await generateKeypair();
     const rec = async () =>
       signGuardianRecoverySuccession(g.privateKey, k1.privateKey, k0.publicKey, k1.publicKey);
-    expect((await rotateKey(mid, await stranger(), await rec())).status).toBe(403);
+    expectSuspended(await rotateKey(mid, await stranger(), await rec()));
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: false });
     // The owner re-sets the same guardian under the identity key.
     expect(
       (await register(mid, await bearer(mid, "laptop", k0), { public_key: hex(k0), ...fields }))
         .status,
     ).toBe(200);
-    expect((await rotateKey(mid, await stranger(), await rec())).status).toBe(200);
-    expect(servedKey(mid)).toBe(hex(k1));
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: true });
+    expectSuspended(await rotateKey(mid, await stranger(), await rec()));
+    expect(servedKey(mid)).toBe(hex(k0));
+    expect(successions(mid)).toBe(0);
   });
 
-  it("a proven guardian survives an ordinary rotation and still recovers from the new key", async () => {
+  it("[recovery suspended] a proven guardian survives an ordinary rotation (200); its recovery from the new key is 503 (would be 200)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -595,8 +628,10 @@ describe("the exact repro: a paired device plants its own guardian and takes the
       k1.publicKey,
       k2.publicKey,
     );
-    expect((await rotateKey(mid, await stranger(), rec)).status).toBe(200);
-    expect(servedKey(mid)).toBe(hex(k2));
+    expectSuspended(await rotateKey(mid, await stranger(), rec));
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: true });
+    expect(servedKey(mid)).toBe(hex(k1));
+    expect(successions(mid)).toBe(1);
   });
 });
 
@@ -626,7 +661,7 @@ describe("differential: every non-guardian-recovery request answers as on origin
     expect(servedKey(mid)).toBe(hex(k0));
   });
 
-  it("a recovery with no guardian on file: 400 recovery_without_registered_guardian, as on main", async () => {
+  it("[recovery suspended] a recovery with no guardian on file: 503 (would be 400 recovery_without_registered_guardian, as on main)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -639,19 +674,20 @@ describe("differential: every non-guardian-recovery request answers as on origin
       k1.publicKey,
     );
     const res = await rotateKey(mid, await stranger(), rec);
-    expect(res.status).toBe(400);
-    expect(String(res.body?.error)).toMatch(/no guardian registered/);
+    expectSuspended(res);
+    expect(provenanceOf(mid).guardian).toBeNull();
+    expect(servedKey(mid)).toBe(hex(k0));
   });
 
-  it("a recovery without guardian_signature: 400, as on main", async () => {
+  it("[recovery suspended] a recovery without guardian_signature: 503 (would be 400, as on main)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
     const k1 = await generateKeypair();
     const rot = await signKeySuccession(k0.privateKey, k1.privateKey, k1.publicKey, k0.publicKey);
     const res = await rotateKey(mid, await stranger(), { ...rot, recovery: true });
-    expect(res.status).toBe(400);
-    expect(String(res.body?.error)).toMatch(/requires guardian_signature/);
+    expectSuspended(res);
+    expect(servedKey(mid)).toBe(hex(k0));
   });
 
   it("register without a guardian, by every setter's credential: 200 and the same body", async () => {
@@ -772,7 +808,7 @@ describe("legacy ids: a guardian that can never be proven is refused, and the re
     expect(guardianOnFile(mid)).toBe(hex(g));
   });
 
-  it("legacy id, recovery under a pre-refusal guardian → 403 GUARDIAN_NOT_PROVEN with the legacy wording (no re-set instruction)", async () => {
+  it("[recovery suspended] legacy id, recovery under a pre-refusal guardian → 503 (would be 403 GUARDIAN_NOT_PROVEN with the legacy wording, no re-set instruction)", async () => {
     const k0 = await generateKeypair();
     const mid = crypto.randomUUID();
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -789,16 +825,16 @@ describe("legacy ids: a guardian that can never be proven is refused, and the re
       k1.publicKey,
     );
     const res = await rotateKey(mid, await stranger(), rec);
-    expect(res.status).toBe(403);
-    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
-    expect(String(res.body?.error)).toMatch(/legacy/i);
-    expect(String(res.body?.error)).toMatch(/not available/i);
-    expect(String(res.body?.error)).not.toMatch(/re-set/i);
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: false });
+    expect(notProvenWording(mid)).toMatch(/legacy/i);
+    expect(notProvenWording(mid)).toMatch(/not available/i);
+    expect(notProvenWording(mid)).not.toMatch(/re-set/i);
     expect(registryKey(mid)).toBe(hex(k0));
     expect(successions(mid)).toBe(0);
   });
 
-  it("legacy id, the same recovery through the register door's succession branch → 403 with the legacy wording", async () => {
+  it("[recovery suspended] legacy id, the same recovery through the register door's succession branch → 503 (would be 403 with the legacy wording)", async () => {
     const k0 = await generateKeypair();
     const mid = crypto.randomUUID();
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -818,15 +854,15 @@ describe("legacy ids: a guardian that can never be proven is refused, and the re
       public_key: hex(k1),
       succession,
     });
-    expect(res.status).toBe(403);
-    const body = res.body as { code?: string; error?: string } | null;
-    expect(body?.code).toBe("GUARDIAN_NOT_PROVEN");
-    expect(String(body?.error)).toMatch(/legacy/i);
-    expect(String(body?.error)).not.toMatch(/re-set/i);
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: false });
+    expect(notProvenWording(mid)).toMatch(/legacy/i);
+    expect(notProvenWording(mid)).not.toMatch(/re-set/i);
+    expect(registryKey(mid)).toBe(hex(k0));
     expect(successions(mid)).toBe(0);
   });
 
-  it("a provable identity's refusal keeps the fix: re-set the guardian with a request proven by the current identity key", async () => {
+  it("[recovery suspended] a provable identity's refusal keeps the fix (503; the would-be wording names the re-set)", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -845,16 +881,18 @@ describe("legacy ids: a guardian that can never be proven is refused, and the re
       k1.publicKey,
     );
     const res = await rotateKey(mid, await stranger(), rec);
-    expect(res.status).toBe(403);
-    expect(String(res.body?.error)).toMatch(
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: false });
+    expect(notProvenWording(mid)).toMatch(
       /re-set the guardian with a request proven by the current identity key/,
     );
-    expect(String(res.body?.error)).not.toMatch(/legacy/i);
+    expect(notProvenWording(mid)).not.toMatch(/legacy/i);
+    expect(servedKey(mid)).toBe(hex(k0));
   });
 });
 
 describe("the bearer's key is the one the middleware verified, never re-read in the handler", () => {
-  it("a device row rewritten to the identity key between auth and handler does not make a paired device's guardian proven", async () => {
+  it("[recovery suspended] a device row rewritten to the identity key between auth and handler does not make a paired device's guardian proven", async () => {
     const k0 = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(k0));
     expect(await registerSelf(mid, "laptop", k0)).toBe(201);
@@ -899,12 +937,12 @@ describe("the bearer's key is the one the middleware verified, never re-read in 
       k1.publicKey,
     );
     const res = await rotateKey(mid, await stranger(), rec);
-    expect(res.status).toBe(403);
-    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: false });
     expect(servedKey(mid)).toBe(hex(k0));
   });
 
-  it("no holder: a device row rewritten to the genesis key between auth and handler records no E-sov and no evidence for a paired device's guardian", async () => {
+  it("[recovery suspended] no holder: a device row rewritten to the genesis key between auth and handler records no E-sov and no evidence for a paired device's guardian", async () => {
     // A sovereign id with NO holder (bootstrap proves nothing), and a paired
     // device on its own key kd. If the handler re-read the bearer's device
     // row after its awaits, it would see the genesis key k0, "prove" E-sov
@@ -959,8 +997,8 @@ describe("the bearer's key is the one the middleware verified, never re-read in 
       k1.publicKey,
     );
     const res = await rotateKey(mid, await stranger(), rec);
-    expect(res.status).toBe(403);
-    expect(res.body?.code).toBe("GUARDIAN_NOT_PROVEN");
+    expectSuspended(res);
+    expect(provenanceOf(mid)).toEqual({ guardian: hex(g), proven: false });
     expect(successions(mid)).toBe(0);
   });
 });

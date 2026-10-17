@@ -82,6 +82,23 @@ export class GuardianNotProvenError extends RelayError {
 }
 
 /**
+ * A guardian recovery while guardian recovery is suspended on this relay (P0
+ * containment, `guardian-recovery-containment.ts`). Every recovery is refused,
+ * whatever its guardian or signatures; ordinary rotation is unaffected.
+ */
+export class GuardianRecoverySuspendedError extends RelayError {
+  constructor(options?: ErrorOptions) {
+    super(
+      "GUARDIAN_RECOVERY_SUSPENDED",
+      "Guardian recovery is temporarily suspended on this relay. No guardian recovery is applied, whatever its guardian or signatures. Ordinary key rotation (signed by the current key, old_key_signature) and guardian registration are unaffected.",
+      503,
+      options,
+    );
+    this.name = "GuardianRecoverySuspendedError";
+  }
+}
+
+/**
  * A guardian set for an identity whose guardian could never carry provenance
  * — a legacy (non-sovereign) id with no held key, which no request can prove
  * (D2; `guardianEvidencePossible`). Refused at `/agents/register` rather than
