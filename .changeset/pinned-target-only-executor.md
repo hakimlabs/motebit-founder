@@ -12,3 +12,5 @@ The pin (a P2P `target_agent`, an explicit `target_agent`, or a path agent that 
 The addressed doors name their target, so the pin holds whatever token carries the request: the A2A (`/a2a/agents/:id`) and AP2 (`/ap2/agents/:id/mandate`) bridges submit with `target_agent` set to the addressed agent — their `a2a:…` / `ap2:…` submitter labels name no identity, so the path alone did not pin them.
 
 CLI: `motebit delegate` now also names its worker as `target_agent` (equal to the agent it posts to). With `MOTEBIT_API_TOKEN`, `MOTEBIT_SYNC_TOKEN` or a configured sync token set, the CLI submits with the master token, where the relay can verify no caller; naming the target pins the task even when the relay does not know the delegator's id.
+
+Federation: a peer relay's listing for a pinned id is taken as the target only if it carries a key this relay already holds for that id. An offline target is off this relay's shelf, so before this check a squatter registered on a peer under the target's id would receive the forwarded task.
