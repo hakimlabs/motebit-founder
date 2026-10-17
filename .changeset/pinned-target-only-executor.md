@@ -13,4 +13,4 @@ The addressed doors name their target, so the pin holds whatever token carries t
 
 CLI: `motebit delegate` now also names its worker as `target_agent` (equal to the agent it posts to). With `MOTEBIT_API_TOKEN`, `MOTEBIT_SYNC_TOKEN` or a configured sync token set, the CLI submits with the master token, where the relay can verify no caller; naming the target pins the task even when the relay does not know the delegator's id.
 
-Federation: a peer relay's listing for a pinned id is taken as the target only if it carries a key this relay already holds for that id. An offline target is off this relay's shelf, so before this check a squatter registered on a peer under the target's id would receive the forwarded task.
+Federation: a pinned identity this relay holds a key for is hosted here, so it is never forwarded to a peer relay's listing for its id. It runs through this relay or waits. A peer cannot prove who it hosts, and an offline target is off this relay's shelf, so before this rule a squatter listed on a peer under the target's id, with its own key or a copied one, would receive the forwarded task.
