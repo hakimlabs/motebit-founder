@@ -460,43 +460,63 @@ describe("a pinned task with its target offline is never routed to another agent
     expect(pushWakes.calls).toContain(target.motebitId);
   });
 
-  it("federated squatter under the target's OWN id and another key: no forward", async () => {
-    const relayA = await newRelay({
-      enableDeviceAuth: false,
-      federation: { endpointUrl: "http://relay-a.test:3000", displayName: "A" },
-    });
-    const relayB = await newRelay({
-      enableDeviceAuth: false,
-      federation: { endpointUrl: "http://relay-b.test:3001", displayName: "B" },
-    });
-    installFederationFetch({
-      "http://relay-a.test:3000": relayA,
-      "http://relay-b.test:3001": relayB,
-    });
-    await establishPeering(relayA, "http://relay-a.test:3000", relayB, "http://relay-b.test:3001");
+  // A pin only NARROWS main's routing decision; it never adds a federated
+  // forward main would not make. A peer's listing proves nothing about who it
+  // hosts: an id and a public key are both public, so a squatter can copy
+  // either. Every listing a peer can fake is driven here with the target
+  // offline and off A's shelf (so A's local-id filter does not drop it).
+  // "decoy-trusted" is a different agent the delegator already trusts — main
+  // forwards to it, so only the pin filter stops it.
+  const FEDERATED_FAKES = [
+    "decoy-trusted",
+    "squatter-own-key",
+    "squatter-copied-target-key",
+  ] as const;
+  for (const fake of FEDERATED_FAKES) {
+    it(`federated listing a peer can fake (${fake}): no forward`, async () => {
+      const relayA = await newRelay({
+        enableDeviceAuth: false,
+        federation: { endpointUrl: "http://relay-a.test:3000", displayName: "A" },
+      });
+      const relayB = await newRelay({
+        enableDeviceAuth: false,
+        federation: { endpointUrl: "http://relay-b.test:3001", displayName: "B" },
+      });
+      installFederationFetch({
+        "http://relay-a.test:3000": relayA,
+        "http://relay-b.test:3001": relayB,
+      });
+      await establishPeering(
+        relayA,
+        "http://relay-a.test:3000",
+        relayB,
+        "http://relay-b.test:3001",
+      );
 
-    const delegator = await newAgent(relayA);
-    // The target's real key is on A (device row); it is offline and off A's
-    // shelf, so A's federated fetch does not drop B's listing for its id.
-    const target = await newAgent(relayA);
-    // On B, a squatter lists the target's id under a key it controls.
-    const squatter: Agent = {
-      motebitId: target.motebitId,
-      deviceId: "squat-dev",
-      kp: await generateKeypair(),
-    };
-    await list(relayB, squatter, { endpoint: "http://127.0.0.1:1/mcp" });
-    const squatSock = fakeSocket(relayB, target.motebitId);
+      const delegator = await newAgent(relayA);
+      const target = await newAgent(relayA); // real key on A; offline, not listed
+      const fakeAgent: Agent =
+        fake === "decoy-trusted"
+          ? await newAgent(relayB)
+          : {
+              motebitId: target.motebitId,
+              deviceId: "squat-dev",
+              kp: fake === "squatter-own-key" ? await generateKeypair() : target.kp,
+            };
+      await list(relayB, fakeAgent, { endpoint: "http://127.0.0.1:1/mcp" });
+      if (fake === "decoy-trusted") trust(relayA, [delegator.motebitId], fakeAgent.motebitId);
+      const fakeSock = fakeSocket(relayB, fakeAgent.motebitId);
 
-    const { status, body } = await submitPinned(relayA, delegator.motebitId, target.motebitId);
-    expect(status).toBe(201);
-    const taskId = body.task_id as string;
+      const { status, body } = await submitPinned(relayA, delegator.motebitId, target.motebitId);
+      expect(status).toBe(201);
+      const taskId = body.task_id as string;
 
-    await sleep(300);
-    expect(taskRequestsIn(squatSock.frames)).not.toContain(taskId);
-    expect(new TaskQueue(relayB.moteDb.db).get(taskId)).toBeUndefined();
-    expect(pushWakes.calls).toContain(target.motebitId);
-  });
+      await sleep(300);
+      expect(taskRequestsIn(fakeSock.frames)).not.toContain(taskId);
+      expect(new TaskQueue(relayB.moteDb.db).get(taskId)).toBeUndefined();
+      expect(pushWakes.calls).toContain(target.motebitId);
+    });
+  }
 
   it("explicit self-pin (target_agent = submitter = path) is never routed to another agent", async () => {
     const relay = await newRelay();
@@ -804,6 +824,9 @@ describe("legitimate flows are unchanged", () => {
     const decoy = await newAgent(relayB);
     await list(relayB, target, { endpoint: "http://127.0.0.1:1/mcp" });
     await list(relayB, decoy, { endpoint: "http://127.0.0.1:1/mcp" });
+    // The delegator trusts the decoy, so a ranking would pick it: only the
+    // pin keeps the forward on the target.
+    trust(relayA, [delegator.motebitId], decoy.motebitId);
     const targetSock = fakeSocket(relayB, target.motebitId);
     const decoySock = fakeSocket(relayB, decoy.motebitId);
 

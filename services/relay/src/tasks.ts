@@ -183,13 +183,7 @@ import { isKnownIdentity } from "./identity-revocation.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { identityGuardianFor, keysHeldBy, verificationKeyFor } from "./identity-keys.js";
 import type { ReconcileKeyConnections } from "./connection-ports.js";
-import {
-  candidatesUnderPin,
-  federatedUnderPin,
-  pinRefusesClaim,
-  pinnedSelection,
-  taskPinOf,
-} from "./task-pin.js";
+import { candidatesUnderPin, pinRefusesClaim, pinnedSelection, taskPinOf } from "./task-pin.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -4600,16 +4594,24 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         }
 
         // Merge local and federated candidates before ranking
-        const federatedProfiles = candidatesUnderPin(
-          pin,
-          federatedUnderPin(
-            pin,
-            federatedCandidates.filter((fc) => !excludeSet.has(fc.profile.motebit_id)),
-            (fc) => fc._public_key,
-            pin != null ? keysHeldBy(moteDb.db, pin) : new Set<string>(),
-          ).map((fc) => fc.profile),
-          (p) => p.motebit_id,
-        );
+        // A pinned identity this relay holds a key for is HOSTED here: it is
+        // executed through this relay or the task waits — never through a
+        // peer's listing for its id. A peer cannot prove who it hosts (an id
+        // and a public key are both public), and an offline target is off this
+        // relay's shelf, so nothing else would stop a squatter on a peer
+        // (#1123 cold reviews 1 and 2). An id this relay holds no key for is
+        // addressed across federation as the peer lists it (rule 33's stated
+        // residual).
+        const pinHostedHere = pin != null && keysHeldBy(moteDb.db, pin).size > 0;
+        const federatedProfiles = pinHostedHere
+          ? []
+          : candidatesUnderPin(
+              pin,
+              federatedCandidates
+                .filter((fc) => !excludeSet.has(fc.profile.motebit_id))
+                .map((fc) => fc.profile),
+              (p) => p.motebit_id,
+            );
         const allProfiles = [...eligibleProfiles, ...federatedProfiles];
 
         if (allProfiles.length > 0) {

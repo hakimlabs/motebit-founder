@@ -69,8 +69,8 @@ const TAMPERS: Tamper[] = [
       },
       {
         file: "services/relay/src/tasks.ts",
-        find: "        const federatedProfiles = candidatesUnderPin(\n          pin,",
-        replace: "        const federatedProfiles = candidatesUnderPin(\n          null,",
+        find: "          : candidatesUnderPin(\n              pin,",
+        replace: "          : candidatesUnderPin(\n              null,",
       },
     ],
     test: ROUTES,
@@ -87,12 +87,12 @@ const TAMPERS: Tamper[] = [
       },
       {
         file: "services/relay/src/tasks.ts",
-        find: "        const federatedProfiles = candidatesUnderPin(\n          pin,",
-        replace: "        const federatedProfiles = candidatesUnderPin(\n          null,",
+        find: "          : candidatesUnderPin(\n              pin,",
+        replace: "          : candidatesUnderPin(\n              null,",
       },
     ],
     test: ROUTES,
-    filter: "federated decoy",
+    filter: "forwarded to — and only it",
   },
   {
     name: "claim check: a non-target body is granted the pinned task",
@@ -228,16 +228,16 @@ const TAMPERS: Tamper[] = [
     filter: "uses --target to skip discovery",
   },
   {
-    name: "federated squatter: a peer's listing for the pinned id under another key is kept",
+    name: "hosted pin: a peer's listing for an identity this relay holds a key for is offered",
     edits: [
       {
         file: "services/relay/src/tasks.ts",
-        find: "            pin != null ? keysHeldBy(moteDb.db, pin) : new Set<string>(),",
-        replace: "            new Set<string>(),",
+        find: "        const pinHostedHere = pin != null && keysHeldBy(moteDb.db, pin).size > 0;",
+        replace: "        const pinHostedHere = false;",
       },
     ],
     test: ROUTES,
-    filter: "federated squatter",
+    filter: "squatter-copied-target-key",
   },
 ];
 
