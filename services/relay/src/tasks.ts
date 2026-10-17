@@ -181,9 +181,15 @@ function x402SettlementRef(
 import { isGrantRevokedBy } from "./delegation-revocations.js";
 import { isKnownIdentity } from "./identity-revocation.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
-import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
+import { identityGuardianFor, keysHeldBy, verificationKeyFor } from "./identity-keys.js";
 import type { ReconcileKeyConnections } from "./connection-ports.js";
-import { candidatesUnderPin, pinRefusesClaim, pinnedSelection, taskPinOf } from "./task-pin.js";
+import {
+  candidatesUnderPin,
+  federatedUnderPin,
+  pinRefusesClaim,
+  pinnedSelection,
+  taskPinOf,
+} from "./task-pin.js";
 
 const logger = createLogger({ service: "tasks" });
 
@@ -4596,9 +4602,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         // Merge local and federated candidates before ranking
         const federatedProfiles = candidatesUnderPin(
           pin,
-          federatedCandidates
-            .filter((fc) => !excludeSet.has(fc.profile.motebit_id))
-            .map((fc) => fc.profile),
+          federatedUnderPin(
+            pin,
+            federatedCandidates.filter((fc) => !excludeSet.has(fc.profile.motebit_id)),
+            (fc) => fc._public_key,
+            pin != null ? keysHeldBy(moteDb.db, pin) : new Set<string>(),
+          ).map((fc) => fc.profile),
           (p) => p.motebit_id,
         );
         const allProfiles = [...eligibleProfiles, ...federatedProfiles];

@@ -227,6 +227,18 @@ const TAMPERS: Tamper[] = [
     test: "src/__tests__/money-flows.test.ts",
     filter: "uses --target to skip discovery",
   },
+  {
+    name: "federated squatter: a peer's listing for the pinned id under another key is kept",
+    edits: [
+      {
+        file: "services/relay/src/tasks.ts",
+        find: "            pin != null ? keysHeldBy(moteDb.db, pin) : new Set<string>(),",
+        replace: "            new Set<string>(),",
+      },
+    ],
+    test: ROUTES,
+    filter: "federated squatter",
+  },
 ];
 
 function run(pkg: string, args: string[]): boolean {

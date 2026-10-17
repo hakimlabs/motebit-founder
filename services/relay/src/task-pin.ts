@@ -107,6 +107,29 @@ export function candidatesUnderPin<T>(
 }
 
 /**
+ * Federated candidates under a pin: a peer's listing for the pinned id is the
+ * target only if it carries a key this relay already holds for that id. A
+ * peer cannot prove who it hosts, and an offline target is off this relay's
+ * shelf, so its id is not filtered out as local. Without this check, a
+ * squatter registered on a peer under the target's id would receive the
+ * forward (#1123 cold review). When this relay holds no key for the pin, the
+ * candidates are unchanged.
+ */
+export function federatedUnderPin<T>(
+  pin: string | null,
+  candidates: T[],
+  keyOf: (c: T) => string | null,
+  heldKeys: ReadonlySet<string>,
+): T[] {
+  if (pin == null || heldKeys.size === 0) return candidates;
+  const held = new Set([...heldKeys].map((k) => k.toLowerCase()));
+  return candidates.filter((c) => {
+    const key = keyOf(c);
+    return key != null && held.has(key.toLowerCase());
+  });
+}
+
+/**
  * The scored phase under a pin: the target's own profile, selected on its
  * own route (through the peer relay that listed it, else direct), or nothing.
  * Never ranked — a pin is a deterministic override, so no composite score

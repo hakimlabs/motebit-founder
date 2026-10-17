@@ -460,6 +460,44 @@ describe("a pinned task with its target offline is never routed to another agent
     expect(pushWakes.calls).toContain(target.motebitId);
   });
 
+  it("federated squatter under the target's OWN id and another key: no forward", async () => {
+    const relayA = await newRelay({
+      enableDeviceAuth: false,
+      federation: { endpointUrl: "http://relay-a.test:3000", displayName: "A" },
+    });
+    const relayB = await newRelay({
+      enableDeviceAuth: false,
+      federation: { endpointUrl: "http://relay-b.test:3001", displayName: "B" },
+    });
+    installFederationFetch({
+      "http://relay-a.test:3000": relayA,
+      "http://relay-b.test:3001": relayB,
+    });
+    await establishPeering(relayA, "http://relay-a.test:3000", relayB, "http://relay-b.test:3001");
+
+    const delegator = await newAgent(relayA);
+    // The target's real key is on A (device row); it is offline and off A's
+    // shelf, so A's federated fetch does not drop B's listing for its id.
+    const target = await newAgent(relayA);
+    // On B, a squatter lists the target's id under a key it controls.
+    const squatter: Agent = {
+      motebitId: target.motebitId,
+      deviceId: "squat-dev",
+      kp: await generateKeypair(),
+    };
+    await list(relayB, squatter, { endpoint: "http://127.0.0.1:1/mcp" });
+    const squatSock = fakeSocket(relayB, target.motebitId);
+
+    const { status, body } = await submitPinned(relayA, delegator.motebitId, target.motebitId);
+    expect(status).toBe(201);
+    const taskId = body.task_id as string;
+
+    await sleep(300);
+    expect(taskRequestsIn(squatSock.frames)).not.toContain(taskId);
+    expect(new TaskQueue(relayB.moteDb.db).get(taskId)).toBeUndefined();
+    expect(pushWakes.calls).toContain(target.motebitId);
+  });
+
   it("explicit self-pin (target_agent = submitter = path) is never routed to another agent", async () => {
     const relay = await newRelay();
     const self = await newAgent(relay);
