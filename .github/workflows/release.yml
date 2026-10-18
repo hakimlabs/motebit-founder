@@ -315,20 +315,6 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: pnpm
 
-      # npm trusted publishing (OIDC): the runner proves it is THIS repo's
-      # release.yml to the registry and gets a short-lived publish credential
-      # in exchange — no token to mint, rotate, or let expire. The one that
-      # expired on 2026-08-21 went unnoticed for six weeks (#741). Every publish
-      # below reaches npm through the npm CLI (`pnpm publish` shells out to
-      # it), and only npm >= 11.5.1 speaks OIDC; Node 22 ships npm 10, so the
-      # CLI is upgraded here. Requires `id-token: write` on the job (above) and
-      # a Trusted Publisher entry on each package at npmjs.com naming
-      # motebit/motebit + release.yml. NO NODE_AUTH_TOKEN anywhere in this job:
-      # when a token is present the CLI uses it and never attempts OIDC.
-      - name: npm that speaks trusted publishing (OIDC)
-        run: |
-          npm install -g npm@^11
-          npm --version
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -404,6 +390,23 @@ jobs:
             }
             if (failed) process.exit(1);
           "
+
+      # npm trusted publishing (OIDC): the runner proves it is THIS repo's
+      # release.yml to the registry and gets a short-lived publish credential
+      # in exchange — no token to mint, rotate, or let expire. The one that
+      # expired on 2026-08-21 went unnoticed for six weeks (#741). Every publish
+      # below reaches npm through the npm CLI (`pnpm publish` shells out to
+      # it), and only npm >= 11.5.1 speaks OIDC; Node 22 ships npm 10, so the
+      # CLI is upgraded here, after every test and smoke: npm 11 prints config
+      # warnings on stderr (`Unknown env config "recursive"`), and CLI tests that
+      # assert exact stderr read them as failures. Requires `id-token: write` on the job (above) and
+      # a Trusted Publisher entry on each package at npmjs.com naming
+      # motebit/motebit + release.yml. NO NODE_AUTH_TOKEN anywhere in this job:
+      # when a token is present the CLI uses it and never attempts OIDC.
+      - name: npm that speaks trusted publishing (OIDC)
+        run: |
+          npm install -g npm@^11
+          npm --version
 
       # Fires in state 3 (all-ignored changesets accumulating), which is the
       # repo's STEADY state: the `ignore` list holds changesets for private
@@ -587,13 +590,6 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      # Exact npm: >= 11.5.1 speaks trusted publishing. No real NODE_AUTH_TOKEN
-      # is set (setup-node writes only a placeholder), so the CLI uses OIDC.
-      - name: npm that speaks trusted publishing (OIDC)
-        run: |
-          npm install -g npm@11.6.2
-          npm --version
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -612,6 +608,16 @@ jobs:
 
       - name: Pack the exact artifacts
         run: npx tsx scripts/security-publish.ts pack "$OUT"
+
+      # Exact npm: >= 11.5.1 speaks trusted publishing. No real NODE_AUTH_TOKEN
+      # is set (setup-node writes only a placeholder), so the CLI uses OIDC.
+      # Installed only after the tests: npm 11 prints config warnings on stderr
+      # (`Unknown env config "recursive"`), and CLI tests that assert exact
+      # stderr read them as failures (the 2026-10-18 rehearsal).
+      - name: npm that speaks trusted publishing (OIDC)
+        run: |
+          npm install -g npm@11.6.2
+          npm --version
 
       # GITHUB_SHA is main's head when the run was dispatched, not when it was
       # approved. If main has moved since, the authorized commit is no longer

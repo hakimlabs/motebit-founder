@@ -299,6 +299,28 @@ describe("publish authority across every workflow", () => {
     expect(check).toMatch(/\[ "\$HEAD" = "\$INPUT_SHA" \] \|\| \{[^}]*exit 1; \}/);
   });
 
+  it("each publish job installs npm 11 only after its last test and before its publish", () => {
+    // npm 11 prints config warnings on stderr, which CLI tests asserting exact
+    // stderr read as failures: the 2026-10-18 rehearsal stopped there.
+    for (const [job, publishStep] of [
+      ["train-publish", "Direct publish"],
+      ["security-publish", "Publish (dependency order)"],
+    ] as const) {
+      const steps = jobs[job]!.steps ?? [];
+      const publish = steps.findIndex((s) => (s.name ?? "").startsWith(publishStep));
+      const upgrades = steps.flatMap((s, i) =>
+        /npm install -g npm@/.test(s.run ?? "") ? [i] : [],
+      );
+      const tests = steps.flatMap((s, i) =>
+        i < publish && /\btest\b|smoke/i.test(`${s.name ?? ""}\n${s.run ?? ""}`) ? [i] : [],
+      );
+      expect(upgrades).toHaveLength(1);
+      expect(tests.length).toBeGreaterThan(0);
+      expect(upgrades[0]).toBeGreaterThan(Math.max(...tests));
+      expect(upgrades[0]).toBeLessThan(publish);
+    }
+  });
+
   it("the security job never versions or publishes changesets, and uses no remote build cache", () => {
     const job = jobs["security-publish"]!;
     const runs = (job.steps ?? []).map((s) => s.run ?? "").join("\n");
