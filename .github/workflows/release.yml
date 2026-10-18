@@ -23,7 +23,13 @@ on:
         default: true
         type: boolean
 
-concurrency: ${{ github.workflow }}-${{ github.ref }}
+# Push runs and security dispatches queue in separate groups. GitHub keeps one
+# pending run per group and cancels the older, so a shared group would let a
+# merge cancel a dispatch waiting behind its own fix commit's push run, and a
+# dispatch waiting for approval would stall the train.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
 
 # Turbo remote cache — restores build outputs for packages whose inputs
 # haven't changed since the last passing run. Silently no-ops when the
@@ -461,8 +467,8 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      # Exact npm: >= 11.5.1 speaks trusted publishing. No NODE_AUTH_TOKEN, or
-      # the CLI uses it and never attempts OIDC.
+      # Exact npm: >= 11.5.1 speaks trusted publishing. No real NODE_AUTH_TOKEN
+      # is set (setup-node writes only a placeholder), so the CLI uses OIDC.
       - name: npm that speaks trusted publishing (OIDC)
         run: |
           npm install -g npm@11.6.2

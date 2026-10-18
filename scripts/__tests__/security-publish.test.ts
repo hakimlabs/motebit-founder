@@ -120,6 +120,12 @@ describe("the workflow wiring", () => {
     expect(job).toMatch(/permissions:\n      contents: read\n      id-token: write\n/);
   });
 
+  it("push runs and dispatches never share a concurrency group", () => {
+    expect(release).toMatch(
+      /\nconcurrency:\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.ref \}\}-\$\{\{ github\.event_name \}\}\n/,
+    );
+  });
+
   it("never versions or publishes changesets, and uses no remote build cache", () => {
     expect(job).not.toMatch(/changeset/);
     expect(job).toMatch(/TURBO_TOKEN: ""/);
@@ -129,7 +135,7 @@ describe("the workflow wiring", () => {
   it("dispatch inputs reach run scripts only through the environment", () => {
     const runBlocks = job.split(/\n\s+- (?:name|uses):/).filter((s) => /\brun:/.test(s));
     for (const block of runBlocks)
-      expect(block.slice(block.indexOf("run:"))).not.toMatch(/\$\{\{\s*inputs\./);
+      expect(block.slice(block.indexOf("run:"))).not.toMatch(/\$\{\{[^}]*\binputs\./);
   });
 
   it("no other workflow holds an npm publish path", () => {
