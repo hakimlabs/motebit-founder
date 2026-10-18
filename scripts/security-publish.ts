@@ -8,6 +8,8 @@
  *   pack    <out>/plan.json → one tarball per package + <out>/artifacts.json
  *           (name, version, tarball, sha512 integrity). Refuses a tarball whose
  *           manifest is not the planned name@version or still says `workspace:`.
+ *   ahead   → `count=<n>` in $GITHUB_OUTPUT: public packages on main ahead of
+ *           npm. Exit 1 if the registry does not answer for every package.
  *   verify  <out>/artifacts.json → polls the registry until each version is
  *           served with EXACTLY the integrity that was packed and carries a
  *           provenance attestation, then installs them all into an empty
@@ -18,7 +20,14 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -29,6 +38,7 @@ import {
   type RegistryAnswer,
 } from "./lib/publish-freshness.js";
 import {
+  packagesAhead,
   parsePackageList,
   planSecurityPublish,
   registryQuestions,
@@ -52,7 +62,7 @@ function fail(lines: string[]): never {
 
 function outDir(): string {
   const dir = process.argv[3];
-  if (!dir) fail(["usage: security-publish.ts <plan|pack|verify> <out-dir>"]);
+  if (!dir) fail(["usage: security-publish.ts <plan|pack|ahead|verify> <out-dir>"]);
   mkdirSync(dir, { recursive: true });
   return resolve(dir);
 }
@@ -63,13 +73,30 @@ async function plan(out: string): Promise<void> {
   const registry = new Map<string, RegistryAnswer>();
   for (const name of registryQuestions(requested, workspace))
     registry.set(name, await askRegistry(REGISTRY, name, fetch));
-  const result = planSecurityPublish(requested, workspace, registry);
+  const rehearsal = process.env.DRY_RUN === "true";
+  if (rehearsal) console.log("Dry run: a version equal to the registry's latest is accepted.");
+  const result = planSecurityPublish(requested, workspace, registry, { rehearsal });
   if (!result.ok) {
     console.error(`Refusing to publish ${requested.join(" ") || "(nothing)"}:`);
     fail(result.refusals);
   }
   for (const p of result.packages) console.log(`  ✓ ${p.name} ${p.previous} → ${p.version}`);
   writeFileSync(join(out, "plan.json"), JSON.stringify(result.packages, null, 2));
+}
+
+async function ahead(): Promise<void> {
+  const workspace = publishablePackages(REPO_ROOT, workspaceGlobs(REPO_ROOT));
+  const registry = new Map<string, RegistryAnswer>();
+  for (const p of workspace) registry.set(p.name, await askRegistry(REGISTRY, p.name, fetch));
+  const list = packagesAhead(workspace, registry);
+  if (list === null)
+    fail([
+      "the registry did not answer for every public package; refusing to guess whether anything is unpublished",
+    ]);
+  for (const entry of list) console.log(`  ↑ ${entry}`);
+  console.log(`${list.length} public package(s) ahead of npm.`);
+  if (process.env.GITHUB_OUTPUT)
+    appendFileSync(process.env.GITHUB_OUTPUT, `count=${list.length}\n`);
 }
 
 function pack(out: string): void {
@@ -171,8 +198,9 @@ async function main(): Promise<void> {
   const out = outDir();
   if (mode === "plan") await plan(out);
   else if (mode === "pack") pack(out);
+  else if (mode === "ahead") await ahead();
   else if (mode === "verify") await verify(out);
-  else fail([`unknown mode ${mode ?? "(none)"}; expected plan, pack or verify`]);
+  else fail([`unknown mode ${mode ?? "(none)"}; expected plan, pack, ahead or verify`]);
 }
 
 main().catch((err) => {

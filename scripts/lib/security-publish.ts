@@ -20,6 +20,10 @@
  *     the registry, so nothing published references a version npm has not got.
  *
  * Any registry answer other than a clean one (unreachable, unparseable) refuses.
+ *
+ * A REHEARSAL (a dry run only) also accepts a version equal to the registry's
+ * `latest`, so the whole job can be exercised on main before a fix's version
+ * bumps are public. Every other rule holds.
  */
 import {
   compareVersions,
@@ -65,6 +69,7 @@ export function planSecurityPublish(
   requested: readonly string[],
   workspace: readonly PublishablePackage[],
   registry: ReadonlyMap<string, RegistryAnswer>,
+  options: { rehearsal?: boolean } = {},
 ): Plan {
   const refusals: string[] = [];
   const byName = new Map(workspace.map((p) => [p.name, p]));
@@ -95,6 +100,8 @@ export function planSecurityPublish(
       );
     } else if (answer.kind === "absent") {
       refusals.push(`${name} has never been published; a first publish is not a security patch`);
+    } else if (options.rehearsal && compareVersions(answer.latest, pkg.version) === 0) {
+      previous = answer.latest;
     } else if (compareVersions(answer.latest, pkg.version) >= 0) {
       refusals.push(
         `${name}@${pkg.version} is not ahead of the registry (latest ${answer.latest}); nothing to publish, or a downgrade`,
@@ -136,4 +143,23 @@ export function registryQuestions(
     if (pkg) for (const dep of workspaceDeps(pkg, publicNames)) names.add(dep);
   }
   return [...names].sort();
+}
+
+/**
+ * The public packages whose manifest is ahead of npm (behind on the registry,
+ * or never published), or `null` when the registry did not answer for one:
+ * the caller must then fail, never read silence as "nothing to publish".
+ */
+export function packagesAhead(
+  workspace: readonly PublishablePackage[],
+  registry: ReadonlyMap<string, RegistryAnswer>,
+): string[] | null {
+  const ahead: string[] = [];
+  for (const pkg of workspace) {
+    const answer = registry.get(pkg.name);
+    if (!answer || answer.kind === "unreachable") return null;
+    if (answer.kind === "absent" || compareVersions(answer.latest, pkg.version) < 0)
+      ahead.push(`${pkg.name}@${pkg.version}`);
+  }
+  return ahead;
 }

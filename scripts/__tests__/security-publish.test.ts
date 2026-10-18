@@ -1,17 +1,20 @@
 /**
  * security-publish — every refusal of the plan check behind release.yml's
- * `security-publish` job, plus the job's own wiring: dispatch-only, in the
- * `npm-publish` environment, the train never on a dispatch, inputs reaching
- * shell only through the environment, and no other workflow holding an npm
- * publish path.
+ * `security-publish` job, and the publish authority of every workflow: the
+ * only jobs that can publish to npm (an id-token, a publish command, or a
+ * changesets `publish:` input) are the two in release.yml that wait in the
+ * founder-approved `npm-publish` environment. An ordinary push to main runs
+ * only the prepare job, which has neither.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, it, expect } from "vitest";
 
+import { parse } from "yaml";
+
 import type { PublishablePackage, RegistryAnswer } from "../lib/publish-freshness.js";
-import { parsePackageList, planSecurityPublish } from "../lib/security-publish.js";
+import { packagesAhead, parsePackageList, planSecurityPublish } from "../lib/security-publish.js";
 
 function pkg(name: string, version: string, deps: Record<string, string> = {}): PublishablePackage {
   return { name, version, dir: `packages/${name}`, raw: { name, version, dependencies: deps } };
@@ -99,6 +102,27 @@ describe("planSecurityPublish", () => {
     expect(refusals(["@m/crypto"], registry, ws)).toEqual([]);
   });
 
+  it("a rehearsal (dry run) accepts a version equal to latest, and nothing else extra", () => {
+    const plan = planSecurityPublish(["@m/sdk"], workspace, registry, { rehearsal: true });
+    expect(plan).toMatchObject({ ok: true, packages: [{ name: "@m/sdk", previous: "2.10.0" }] });
+    const behind = new Map(registry).set("@m/sdk", published("2.11.0"));
+    expect(planSecurityPublish(["@m/sdk"], workspace, behind, { rehearsal: true }).ok).toBe(false);
+    const absent = new Map(registry).set("@m/sdk", { kind: "absent" });
+    expect(planSecurityPublish(["@m/sdk"], workspace, absent, { rehearsal: true }).ok).toBe(false);
+  });
+
+  it("packagesAhead lists behind and never-published packages, and refuses to guess", () => {
+    expect(packagesAhead(workspace, registry)).toEqual([
+      "@m/crypto@4.0.1",
+      "@m/verifier@1.14.2",
+      "cli@2.2.2",
+    ]);
+    const first = new Map(registry).set("@m/sdk", { kind: "absent" });
+    expect(packagesAhead(workspace, first)).toContain("@m/sdk@2.10.0");
+    const down = new Map(registry).set("@m/sdk", { kind: "unreachable", detail: "x" });
+    expect(packagesAhead(workspace, down)).toBeNull();
+  });
+
   it("splits the dispatch input on spaces and commas", () => {
     expect(parsePackageList(" @m/crypto,@m/verifier \n cli ")).toEqual([
       "@m/crypto",
@@ -108,47 +132,110 @@ describe("planSecurityPublish", () => {
   });
 });
 
-describe("the workflow wiring", () => {
-  const wf = join(__dirname, "..", "..", ".github", "workflows");
-  const release = readFileSync(join(wf, "release.yml"), "utf8");
-  const job = release.slice(release.indexOf("\n  security-publish:"));
+interface Job {
+  if?: string;
+  environment?: string | { name?: string };
+  permissions?: Record<string, string> | string;
+  needs?: string | string[];
+  steps?: Array<{ name?: string; uses?: string; run?: string; with?: Record<string, unknown> }>;
+}
 
-  it("the train runs only on push, the security job only on dispatch, in npm-publish", () => {
-    expect(release).toMatch(/\n  release:\n    if: github\.event_name == 'push'\n/);
-    expect(job).toMatch(/\n    if: github\.event_name == 'workflow_dispatch'\n/);
-    expect(job).toMatch(/\n    environment: npm-publish\n/);
-    expect(job).toMatch(/permissions:\n      contents: read\n      id-token: write\n/);
+const wf = join(__dirname, "..", "..", ".github", "workflows");
+const workflows = readdirSync(wf)
+  .filter((f) => /\.ya?ml$/.test(f))
+  .map((file) => {
+    const text = readFileSync(join(wf, file), "utf8");
+    const doc = parse(text) as { jobs?: Record<string, Job>; concurrency?: unknown };
+    return { file, text, doc };
+  });
+const release = workflows.find((w) => w.file === "release.yml")!;
+const jobs = release.doc.jobs!;
+
+const PUBLISH_COMMAND = /\b(npm|pnpm|changeset)\b(\s+--?\S+(\s+[^-\s]\S*)?)*\s+(publish|release)\b/;
+function envName(job: Job): string | undefined {
+  return typeof job.environment === "string" ? job.environment : job.environment?.name;
+}
+function canPublish(job: Job): string[] {
+  const why: string[] = [];
+  const perms = job.permissions;
+  if (perms === "write-all" || (typeof perms === "object" && perms["id-token"] === "write"))
+    why.push("id-token: write");
+  for (const step of job.steps ?? []) {
+    const lines = (step.run ?? "").split("\n").filter((l) => !/^\s*#/.test(l));
+    if (lines.some((l) => PUBLISH_COMMAND.test(l))) why.push(`publishes in "${step.name}"`);
+    if (step.uses?.startsWith("changesets/action") && step.with && "publish" in step.with)
+      why.push(`changesets publish: in "${step.name}"`);
+  }
+  return why;
+}
+
+describe("publish authority across every workflow", () => {
+  it("every job able to publish to npm waits in the npm-publish environment", () => {
+    const unapproved = workflows.flatMap(({ file, doc }) =>
+      Object.entries(doc.jobs ?? {})
+        .filter(([, job]) => envName(job) !== "npm-publish")
+        // publish-images signs container images with cosign keyless (Sigstore
+        // OIDC), which needs id-token; it has no npm publish path.
+        .filter(([name]) => !(file === "publish-images.yml" && name === "relay"))
+        .map(([name, job]) => ({ job: `${file}:${name}`, why: canPublish(job) }))
+        .filter((j) => j.why.length > 0),
+    );
+    expect(unapproved).toEqual([]);
   });
 
-  it("push runs and dispatches never share a concurrency group", () => {
-    expect(release).toMatch(
-      /\nconcurrency:\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.ref \}\}-\$\{\{ github\.event_name \}\}\n/,
+  it("publish-images is exempt only because it publishes nothing to npm", () => {
+    const images = workflows.find((w) => w.file === "publish-images.yml")!;
+    for (const job of Object.values(images.doc.jobs ?? {}))
+      expect(canPublish(job).filter((w) => w !== "id-token: write")).toEqual([]);
+  });
+
+  it("only release.yml's train-publish and security-publish jobs are in npm-publish", () => {
+    const inEnv = workflows.flatMap(({ file, doc }) =>
+      Object.entries(doc.jobs ?? {})
+        .filter(([, job]) => envName(job) === "npm-publish")
+        .map(([name]) => `${file}:${name}`),
+    );
+    expect(inEnv.sort()).toEqual(["release.yml:security-publish", "release.yml:train-publish"]);
+  });
+
+  it("a push runs prepare, which cannot publish; train-publish follows it, never in version mode", () => {
+    expect(jobs.release!.if).toBe("github.event_name == 'push'");
+    expect(canPublish(jobs.release!)).toEqual([]);
+    expect(jobs["train-publish"]!.needs).toBe("release");
+    expect(jobs["train-publish"]!.if).toBe(
+      "needs.release.outputs.state != 'version-mode' && needs.release.outputs.ahead != '0'",
     );
   });
 
-  it("never versions or publishes changesets, and uses no remote build cache", () => {
-    expect(job).not.toMatch(/changeset/);
-    expect(job).toMatch(/TURBO_TOKEN: ""/);
-    expect(job).not.toMatch(/^\s*NODE_AUTH_TOKEN\s*:/m);
+  it("a dispatch runs only security-publish, read-only on contents", () => {
+    expect(jobs["security-publish"]!.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(jobs["security-publish"]!.permissions).toEqual({
+      contents: "read",
+      "id-token": "write",
+    });
   });
 
-  it("dispatch inputs reach run scripts only through the environment", () => {
-    const runBlocks = job.split(/\n\s+- (?:name|uses):/).filter((s) => /\brun:/.test(s));
-    for (const block of runBlocks)
-      expect(block.slice(block.indexOf("run:"))).not.toMatch(/\$\{\{[^}]*\binputs\./);
+  it("push runs and dispatches never share a concurrency group", () => {
+    expect(release.doc.concurrency).toEqual({
+      group: "${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}",
+      "cancel-in-progress": false,
+    });
   });
 
-  it("no other workflow holds an npm publish path", () => {
-    const others = readdirSync(wf)
-      .filter((f) => f !== "release.yml" && /\.ya?ml$/.test(f))
-      .filter((f) =>
-        readFileSync(join(wf, f), "utf8")
-          .split("\n")
-          .filter((line) => !/^\s*#/.test(line))
-          .some((line) =>
-            /\b(npm|pnpm|changeset)\b(\s+--?\S+(\s+[^-\s]\S*)?)*\s+publish\b/.test(line),
-          ),
-      );
-    expect(others).toEqual([]);
+  it("the security job never versions or publishes changesets, and uses no remote build cache", () => {
+    const job = jobs["security-publish"]! as Job & { env?: Record<string, string> };
+    const runs = (job.steps ?? []).map((s) => s.run ?? "").join("\n");
+    expect(runs).not.toMatch(/changeset/);
+    expect(job.env?.TURBO_TOKEN).toBe("");
+    expect(job.env).not.toHaveProperty("NODE_AUTH_TOKEN");
+  });
+
+  it("release.yml's dispatch inputs reach run scripts only through the environment", () => {
+    for (const { file, doc } of [release])
+      for (const [name, job] of Object.entries(doc.jobs ?? {}))
+        for (const step of job.steps ?? [])
+          expect({ at: `${file}:${name}:${step.name}`, run: step.run ?? "" }).not.toMatchObject({
+            run: expect.stringMatching(/\$\{\{[^}]*\binputs\./),
+          });
   });
 });
