@@ -132,12 +132,27 @@ describe("planSecurityPublish", () => {
   });
 });
 
+type Permissions = Record<string, string> | string | undefined;
+interface Step {
+  name?: string;
+  uses?: string;
+  run?: string;
+  with?: Record<string, unknown>;
+}
 interface Job {
   if?: string;
+  uses?: string;
   environment?: string | { name?: string };
-  permissions?: Record<string, string> | string;
+  permissions?: Permissions;
   needs?: string | string[];
-  steps?: Array<{ name?: string; uses?: string; run?: string; with?: Record<string, unknown> }>;
+  env?: Record<string, unknown>;
+  concurrency?: { group?: string } | string;
+  steps?: Step[];
+}
+interface Workflow {
+  permissions?: Permissions;
+  concurrency?: unknown;
+  jobs?: Record<string, Job>;
 }
 
 const wf = join(__dirname, "..", "..", ".github", "workflows");
@@ -145,48 +160,89 @@ const workflows = readdirSync(wf)
   .filter((f) => /\.ya?ml$/.test(f))
   .map((file) => {
     const text = readFileSync(join(wf, file), "utf8");
-    const doc = parse(text) as { jobs?: Record<string, Job>; concurrency?: unknown };
-    return { file, text, doc };
+    return { file, text, doc: parse(text) as Workflow };
   });
 const release = workflows.find((w) => w.file === "release.yml")!;
 const jobs = release.doc.jobs!;
 
-const PUBLISH_COMMAND = /\b(npm|pnpm|changeset)\b(\s+--?\S+(\s+[^-\s]\S*)?)*\s+(publish|release)\b/;
+// A publish verb after npm/pnpm/yarn/changeset and any flags, `run`, `exec` or
+// `--`: `npm publish`, `pnpm -r publish`, `pnpm run release`,
+// `npm exec -- changeset publish`.
+const PUBLISH_COMMAND =
+  /\b(npm|pnpm|yarn|changeset)\b(\s+(--?\S*|run|exec)(\s+[^-\s]\S*)?)*\s+(publish|release)\b/;
+// The one job allowed an id-token outside npm-publish: cosign keyless signing
+// of container images, with no npm path (checked below).
+const ID_TOKEN_EXEMPT = new Set(["publish-images.yml:relay"]);
+
 function envName(job: Job): string | undefined {
   return typeof job.environment === "string" ? job.environment : job.environment?.name;
 }
-function canPublish(job: Job): string[] {
+function grantsIdToken(perms: Permissions): boolean {
+  return perms === "write-all" || (typeof perms === "object" && perms["id-token"] === "write");
+}
+/** Run text with comments dropped and backslash line continuations joined. */
+function shellLines(run: string): string[] {
+  return run
+    .replace(/\\\n\s*/g, " ")
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l));
+}
+/** Every way this job could publish. A job's own permissions, else the workflow's. */
+function canPublish(job: Job, doc: Workflow): string[] {
   const why: string[] = [];
-  const perms = job.permissions;
-  if (perms === "write-all" || (typeof perms === "object" && perms["id-token"] === "write"))
-    why.push("id-token: write");
+  if (grantsIdToken(job.permissions ?? doc.permissions)) why.push("id-token: write");
+  if (job.uses) why.push(`calls reusable workflow ${job.uses}`);
   for (const step of job.steps ?? []) {
-    const lines = (step.run ?? "").split("\n").filter((l) => !/^\s*#/.test(l));
-    if (lines.some((l) => PUBLISH_COMMAND.test(l))) why.push(`publishes in "${step.name}"`);
+    if (shellLines(step.run ?? "").some((l) => PUBLISH_COMMAND.test(l)))
+      why.push(`publishes in "${step.name}"`);
     if (step.uses?.startsWith("changesets/action") && step.with && "publish" in step.with)
       why.push(`changesets publish: in "${step.name}"`);
+    if (step.uses && !step.uses.startsWith("changesets/action") && /publish/i.test(step.uses))
+      why.push(`publish action ${step.uses}`);
   }
   return why;
 }
 
 describe("publish authority across every workflow", () => {
+  it("no workflow grants id-token or write-all at the top level", () => {
+    expect(
+      workflows.filter(({ doc }) => grantsIdToken(doc.permissions)).map((w) => w.file),
+    ).toEqual([]);
+  });
+
   it("every job able to publish to npm waits in the npm-publish environment", () => {
     const unapproved = workflows.flatMap(({ file, doc }) =>
       Object.entries(doc.jobs ?? {})
         .filter(([, job]) => envName(job) !== "npm-publish")
-        // publish-images signs container images with cosign keyless (Sigstore
-        // OIDC), which needs id-token; it has no npm publish path.
-        .filter(([name]) => !(file === "publish-images.yml" && name === "relay"))
-        .map(([name, job]) => ({ job: `${file}:${name}`, why: canPublish(job) }))
+        .map(([name, job]) => ({
+          job: `${file}:${name}`,
+          why: canPublish(job, doc).filter(
+            (w) => !(w === "id-token: write" && ID_TOKEN_EXEMPT.has(`${file}:${name}`)),
+          ),
+        }))
         .filter((j) => j.why.length > 0),
     );
     expect(unapproved).toEqual([]);
   });
 
-  it("publish-images is exempt only because it publishes nothing to npm", () => {
-    const images = workflows.find((w) => w.file === "publish-images.yml")!;
-    for (const job of Object.values(images.doc.jobs ?? {}))
-      expect(canPublish(job).filter((w) => w !== "id-token: write")).toEqual([]);
+  it("the id-token exemption is a job that publishes nothing to npm", () => {
+    for (const id of ID_TOKEN_EXEMPT) {
+      const [file, name] = id.split(":");
+      const w = workflows.find((x) => x.file === file)!;
+      expect(canPublish(w.doc.jobs![name!]!, w.doc)).toEqual(["id-token: write"]);
+    }
+  });
+
+  it("no workflow hands an npm token to anything", () => {
+    const withToken = workflows
+      .filter(({ text }) =>
+        text
+          .split("\n")
+          .filter((l) => !/^\s*#/.test(l))
+          .some((l) => /NODE_AUTH_TOKEN\s*:|NPM_TOKEN|secrets\.NPM/i.test(l)),
+      )
+      .map((w) => w.file);
+    expect(withToken).toEqual([]);
   });
 
   it("only release.yml's train-publish and security-publish jobs are in npm-publish", () => {
@@ -200,7 +256,7 @@ describe("publish authority across every workflow", () => {
 
   it("a push runs prepare, which cannot publish; train-publish follows it, never in version mode", () => {
     expect(jobs.release!.if).toBe("github.event_name == 'push'");
-    expect(canPublish(jobs.release!)).toEqual([]);
+    expect(canPublish(jobs.release!, release.doc)).toEqual([]);
     expect(jobs["train-publish"]!.needs).toBe("release");
     expect(jobs["train-publish"]!.if).toBe(
       "needs.release.outputs.state != 'version-mode' && needs.release.outputs.ahead != '0'",
@@ -215,27 +271,45 @@ describe("publish authority across every workflow", () => {
     });
   });
 
-  it("push runs and dispatches never share a concurrency group", () => {
-    expect(release.doc.concurrency).toEqual({
-      group: "${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}",
-      "cancel-in-progress": false,
+  it("each release job queues in its own concurrency group, none at workflow level", () => {
+    // A job waiting for approval holds its group, and GitHub cancels all but
+    // the newest pending run in a group.
+    expect(release.doc.concurrency).toBeUndefined();
+    const groups = ["release", "train-publish", "security-publish"].map((j) => {
+      const c = jobs[j]!.concurrency;
+      return typeof c === "string" ? c : c?.group;
     });
+    expect(groups.every((g) => typeof g === "string" && g.length > 0)).toBe(true);
+    expect(new Set(groups).size).toBe(3);
   });
 
   it("the security job never versions or publishes changesets, and uses no remote build cache", () => {
-    const job = jobs["security-publish"]! as Job & { env?: Record<string, string> };
+    const job = jobs["security-publish"]!;
     const runs = (job.steps ?? []).map((s) => s.run ?? "").join("\n");
     expect(runs).not.toMatch(/changeset/);
     expect(job.env?.TURBO_TOKEN).toBe("");
     expect(job.env).not.toHaveProperty("NODE_AUTH_TOKEN");
   });
 
-  it("release.yml's dispatch inputs reach run scripts only through the environment", () => {
-    for (const { file, doc } of [release])
+  it("job-level env uses only the contexts GitHub allows there", () => {
+    // runner, job, steps and env are not available in jobs.<id>.env. A file
+    // that uses them fails to load, and then no job in it runs at all.
+    const allowed = new Set(["github", "inputs", "matrix", "needs", "secrets", "strategy", "vars"]);
+    const bad: string[] = [];
+    for (const { file, doc } of workflows)
       for (const [name, job] of Object.entries(doc.jobs ?? {}))
-        for (const step of job.steps ?? [])
-          expect({ at: `${file}:${name}:${step.name}`, run: step.run ?? "" }).not.toMatchObject({
-            run: expect.stringMatching(/\$\{\{[^}]*\binputs\./),
-          });
+        for (const [key, value] of Object.entries(job.env ?? {}))
+          for (const expr of String(value).matchAll(/\$\{\{([^}]*)\}\}/g))
+            for (const ctx of expr[1]!.replace(/'[^']*'/g, "").matchAll(/\b([a-z_]+)\s*[.[]/g))
+              if (!allowed.has(ctx[1]!)) bad.push(`${file}:${name}.env.${key} uses ${ctx[1]}`);
+    expect(bad).toEqual([]);
+  });
+
+  it("release.yml's dispatch inputs reach run scripts only through the environment", () => {
+    for (const [name, job] of Object.entries(jobs))
+      for (const step of job.steps ?? [])
+        expect({ at: `${name}:${step.name}`, run: step.run ?? "" }).not.toMatchObject({
+          run: expect.stringMatching(/\$\{\{[^}]*\b(inputs|github\.event)\b/),
+        });
   });
 });

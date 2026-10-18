@@ -23,13 +23,11 @@ on:
         default: true
         type: boolean
 
-# Push runs and security dispatches queue in separate groups. GitHub keeps one
-# pending run per group and cancels the older, so a shared group would let a
-# merge cancel a dispatch waiting behind its own fix commit's push run, and a
-# dispatch waiting for approval would stall the train.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: false
+# Concurrency is per job, never per workflow. GitHub keeps one pending run per
+# group and cancels the older, and a job waiting for environment approval holds
+# its group. So prepare, train-publish and security-publish each queue alone: a
+# publish waiting for the founder never stalls the Version Packages PR, and a
+# merge never cancels a dispatch.
 
 # Turbo remote cache — restores build outputs for packages whose inputs
 # haven't changed since the last passing run. Silently no-ops when the
@@ -59,6 +57,9 @@ jobs:
   release:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-prepare-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -229,8 +230,9 @@ jobs:
       # first five runs of this step read those bumps as "main is a patch ahead
       # of npm" (2026-09-24, five red runs, nothing actually unpublished). The
       # manifests are restored from the pushed sha first.
+      # Skipped only when train-publish is about to run and checks it itself.
       - name: Registry matches main (publish-freshness, no grace)
-        if: steps.ahead.outputs.count == '0'
+        if: steps.ahead.outputs.count == '0' || steps.pending.outputs.state == 'version-mode'
         env:
           PUBLISH_FRESHNESS_HOURS: "0"
         run: |
@@ -247,6 +249,9 @@ jobs:
     if: needs.release.outputs.state != 'version-mode' && needs.release.outputs.ahead != '0'
     runs-on: ubuntu-latest
     environment: npm-publish
+    concurrency:
+      group: release-train-publish-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
       id-token: write
@@ -543,6 +548,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: npm-publish
+    concurrency:
+      group: release-security-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -553,7 +561,6 @@ jobs:
       INPUT_SHA: ${{ inputs.sha }}
       PACKAGES: ${{ inputs.packages }}
       DRY_RUN: ${{ inputs.dry-run }}
-      OUT: ${{ runner.temp }}/security-publish
     steps:
       - name: The named commit is main's head
         run: |
@@ -561,6 +568,8 @@ jobs:
           [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::dispatch from main, not $GITHUB_REF"; exit 1; }
           [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase SHA"; exit 1; }
           [ "$INPUT_SHA" = "$GITHUB_SHA" ] || { echo "::error::main is at $GITHUB_SHA, not the authorized $INPUT_SHA"; exit 1; }
+          # The runner context is not available in job-level env.
+          echo "OUT=$RUNNER_TEMP/security-publish" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
