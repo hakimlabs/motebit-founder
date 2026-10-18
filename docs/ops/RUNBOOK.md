@@ -349,16 +349,30 @@ the pinned `create-motebit@0.8.0` wrapper to the canonical CLI:
 README text in `packages/github-action/README.md` also gets a small sweep.
 See the inline comment in `action.yml` for the exact swap point.
 
-### Emergency Patch
+### Emergency Patch (security publish)
 
-```bash
-# Fix the code, then:
-pnpm changeset           # Create changeset
-pnpm version-packages    # Bump versions
-pnpm run build           # Build
-pnpm release             # Publish
-git push --follow-tags   # Push version commits + tags
-```
+A patch that cannot wait for the train ships through the `security-publish` job in
+`.github/workflows/release.yml`. npm trusts exactly one publisher per package
+(motebit/motebit + `release.yml` + environment `npm-publish`), so a laptop publish or any other
+workflow file is refused, and a hand publish carries no provenance.
+
+1. Bump the patched packages' versions by hand in the fix PR (dependencies first, plus each
+   CHANGELOG entry). Do not run `pnpm version-packages`: that would version every pending
+   changeset.
+2. After the fix merges, note main's head SHA and run **Actions → Release → Run workflow** on
+   `main` with that `sha`, the `packages` in dependency order (for example
+   `@motebit/crypto @motebit/verifier`), and `dry-run` left on.
+3. Approve the `npm-publish` environment. The dry run plans, builds, tests, packs and runs
+   `npm publish --dry-run`. Its summary lists each tarball's sha512.
+4. Run it again with `dry-run` off and approve. The job publishes the packed tarballs in order,
+   then checks that the registry serves each with the packed integrity and a provenance
+   attestation, and runs `npm audit signatures` on a clean install.
+5. Push the `<name>@<version>` tags yourself. The job has `contents: read` and pushes nothing.
+
+The job refuses before building when: main has moved past the SHA; a package is private or listed
+twice; a version is not ahead of the registry or would be a first publish; a dependency is listed
+after its dependent; or an unlisted public dependency is not on the registry. The rules are in
+`scripts/lib/security-publish.ts`.
 
 ---
 

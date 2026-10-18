@@ -4,6 +4,24 @@ on:
   push:
     branches:
       - main
+  # A security patch: an exact, founder-named list of packages at the versions
+  # the named commit carries, published by the `security-publish` job below and
+  # nothing else. The train (`release`) never runs on a dispatch.
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Full 40-character SHA of the main commit to publish. Must be main's head when the run starts."
+        required: true
+        type: string
+      packages:
+        description: "Packages to publish, dependencies first, separated by spaces (e.g. @motebit/crypto @motebit/verifier)."
+        required: true
+        type: string
+      dry-run:
+        description: "Plan, build, test and pack, then npm publish --dry-run. Publishes nothing."
+        required: true
+        default: true
+        type: boolean
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -27,6 +45,7 @@ permissions:
 
 jobs:
   release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -389,3 +408,102 @@ jobs:
         run: |
           git checkout -q "${{ github.sha }}" -- pnpm-workspace.yaml packages apps services
           npx tsx scripts/check-publish-freshness.ts --require-registry
+
+  # ── Security publish (manual dispatch only) ────────────────────────
+  # Publishes exactly the packages the dispatch names, at the versions the
+  # named commit carries, through this file's trusted-publisher identity — npm
+  # authorizes motebit/motebit + release.yml + environment `npm-publish`, so a
+  # publish path in any other workflow file is refused by the registry. The
+  # environment holds the run until the founder approves it, and only main may
+  # deploy to it.
+  #
+  # What it refuses (scripts/lib/security-publish.ts, before anything builds):
+  # a SHA that is not main's head, a package that is private or listed twice,
+  # a version that is not ahead of the registry or is a first publish, a
+  # dependency listed after its dependent, and an unlisted public workspace
+  # dependency the registry has not got. It never runs `changeset version` or
+  # `changeset publish`, so the pending changesets are untouched, and it pushes
+  # no tags (contents: read). No remote build cache: the artifacts are built
+  # from source on this runner.
+  security-publish:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TURBO_TOKEN: ""
+      TURBO_TEAM: ""
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ""
+      INPUT_SHA: ${{ inputs.sha }}
+      PACKAGES: ${{ inputs.packages }}
+      DRY_RUN: ${{ inputs.dry-run }}
+      OUT: ${{ runner.temp }}/security-publish
+    steps:
+      - name: The named commit is main's head
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::dispatch from main, not $GITHUB_REF"; exit 1; }
+          [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase SHA"; exit 1; }
+          [ "$INPUT_SHA" = "$GITHUB_SHA" ] || { echo "::error::main is at $GITHUB_SHA, not the authorized $INPUT_SHA"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+
+      # No dependency cache on a publishing job.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Exact npm: >= 11.5.1 speaks trusted publishing. No NODE_AUTH_TOKEN, or
+      # the CLI uses it and never attempts OIDC.
+      - name: npm that speaks trusted publishing (OIDC)
+        run: |
+          npm install -g npm@11.6.2
+          npm --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Plan (refuses anything but the named patch)
+        run: npx tsx scripts/security-publish.ts plan "$OUT"
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test the planned packages
+        run: |
+          set -euo pipefail
+          for name in $(jq -r '.[].name' "$OUT/plan.json"); do
+            pnpm --filter "$name" test
+          done
+
+      - name: Pack the exact artifacts
+        run: npx tsx scripts/security-publish.ts pack "$OUT"
+
+      - name: Publish (dependency order)
+        run: |
+          set -euo pipefail
+          DRY=""
+          [ "$DRY_RUN" = "true" ] && DRY="--dry-run"
+          jq -r '.[].tarball' "$OUT/artifacts.json" | while read -r tgz; do
+            npm publish "$tgz" --provenance --access public $DRY
+          done
+
+      - name: Verify the registry serves what was packed, with provenance
+        if: inputs.dry-run == false
+        run: npx tsx scripts/security-publish.ts verify "$OUT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Security publish (dry-run: $DRY_RUN) at \`$INPUT_SHA\`"
+            [ -f "$OUT/artifacts.json" ] && jq -r '.[] | "- `\(.name)@\(.version)` `\(.integrity)`"' "$OUT/artifacts.json"
+          } >> "$GITHUB_STEP_SUMMARY" || true
