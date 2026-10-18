@@ -279,16 +279,24 @@ describe("publish authority across every workflow", () => {
     });
   });
 
-  it("each release job queues in its own concurrency group, none at workflow level", () => {
-    // A job waiting for approval holds its group, and GitHub cancels all but
-    // the newest pending run in a group.
+  it("prepare queues alone; the two publishing jobs share one group", () => {
+    // A job waiting for approval holds its group, and by default GitHub cancels
+    // all but the newest pending run in a group.
     expect(release.doc.concurrency).toBeUndefined();
-    const groups = ["release", "train-publish", "security-publish"].map((j) => {
-      const c = jobs[j]!.concurrency;
-      return typeof c === "string" ? c : c?.group;
-    });
-    expect(groups.every((g) => typeof g === "string" && g.length > 0)).toBe(true);
-    expect(new Set(groups).size).toBe(3);
+    const c = (j: string) => jobs[j]!.concurrency as Record<string, unknown> | undefined;
+    expect(c("release")?.group).toEqual(expect.any(String));
+    expect(c("release")?.group).not.toBe("npm-publish");
+    for (const j of ["train-publish", "security-publish"])
+      expect(c(j)).toEqual({ group: "npm-publish", "cancel-in-progress": false });
+  });
+
+  it("security-publish re-reads main's head immediately before publishing", () => {
+    const names = (jobs["security-publish"]!.steps ?? []).map((s) => s.name);
+    const publish = names.indexOf("Publish (dependency order)");
+    expect(names[publish - 1]).toBe("Main is still the authorized commit");
+    const check = jobs["security-publish"]!.steps![publish - 1]!.run ?? "";
+    expect(check).toMatch(/git ls-remote [^\n]* refs\/heads\/main/);
+    expect(check).toMatch(/\[ "\$HEAD" = "\$INPUT_SHA" \] \|\| \{[^}]*exit 1; \}/);
   });
 
   it("the security job never versions or publishes changesets, and uses no remote build cache", () => {

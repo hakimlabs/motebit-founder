@@ -390,6 +390,8 @@ publish carries no provenance.
    provenance attestation, and runs `npm audit signatures` on a clean install. The interval
    between the merge and this run is the only time the fix is public without a patched
    package.
+   Just before publishing, the job re-reads main's head and refuses if anything merged after
+   the dispatch; dispatch again for the new head.
    If the merge's own push also asks for `train-publish` approval (main ahead of npm, no
    pending changesets), reject that one: the security-publish run is the verified path.
 4. **Tags.** Push the `<name>@<version>` tags yourself. The job has `contents: read`.

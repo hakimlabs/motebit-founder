@@ -23,11 +23,14 @@ on:
         default: true
         type: boolean
 
-# Concurrency is per job, never per workflow. GitHub keeps one pending run per
-# group and cancels the older, and a job waiting for environment approval holds
-# its group. So prepare, train-publish and security-publish each queue alone: a
-# publish waiting for the founder never stalls the Version Packages PR, and a
-# merge never cancels a dispatch.
+# Concurrency is per job, never per workflow: a job waiting for environment
+# approval holds its group. Prepare queues alone, so a publish waiting for the
+# founder never stalls the Version Packages PR. The two publishing jobs share
+# one group, so npm never sees two publishes at once. GitHub keeps one pending
+# run per group, so a newer publish cancels an older one still pending: that
+# costs a re-dispatch or re-run, never a wrong publish. (`queue: max` would keep
+# both, but the workflow linter does not know the key yet, and a key GitHub
+# rejects stops the whole file from loading.)
 
 # Turbo remote cache — restores build outputs for packages whose inputs
 # haven't changed since the last passing run. Silently no-ops when the
@@ -250,7 +253,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm-publish
     concurrency:
-      group: release-train-publish-${{ github.ref }}
+      group: npm-publish
       cancel-in-progress: false
     permissions:
       contents: write
@@ -549,7 +552,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm-publish
     concurrency:
-      group: release-security-publish
+      group: npm-publish
       cancel-in-progress: false
     permissions:
       contents: read
@@ -610,6 +613,16 @@ jobs:
       - name: Pack the exact artifacts
         run: npx tsx scripts/security-publish.ts pack "$OUT"
 
+      # GITHUB_SHA is main's head when the run was dispatched, not when it was
+      # approved. If main has moved since, the authorized commit is no longer
+      # current: refuse, and dispatch again for the new head.
+      - name: Main is still the authorized commit
+        run: |
+          set -euo pipefail
+          HEAD=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/heads/main | cut -f1)
+          [ "$HEAD" = "$INPUT_SHA" ] || { echo "::error::main moved to $HEAD after $INPUT_SHA was authorized"; exit 1; }
+          echo "main is $HEAD, as authorized"
+
       - name: Publish (dependency order)
         run: |
           set -euo pipefail
@@ -627,6 +640,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Security publish (dry-run: $DRY_RUN) at \`$INPUT_SHA\`"
+            echo "### Security publish (dry-run: $DRY_RUN)"
+            echo "Authorized commit: \`$INPUT_SHA\` · approved run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             [ -f "$OUT/artifacts.json" ] && jq -r '.[] | "- `\(.name)@\(.version)` `\(.integrity)`"' "$OUT/artifacts.json"
           } >> "$GITHUB_STEP_SUMMARY" || true
