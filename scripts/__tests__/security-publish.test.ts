@@ -233,13 +233,21 @@ describe("publish authority across every workflow", () => {
     }
   });
 
-  it("no workflow hands an npm token to anything", () => {
+  // Drift guard, not a proof: a determined author can spell a token so no
+  // text check sees it (a computed secret name, a quoted key). Token publishing
+  // is closed on npm's side: every package is "Require two-factor
+  // authentication and disallow bypass 2fa tokens" (RUNBOOK, Publish authority).
+  it("no workflow names an npm token, indexes secrets dynamically, or writes an auth token", () => {
     const withToken = workflows
       .filter(({ text }) =>
         text
           .split("\n")
           .filter((l) => !/^\s*#/.test(l))
-          .some((l) => /NODE_AUTH_TOKEN\s*:|NPM_TOKEN|secrets\.NPM/i.test(l)),
+          .some((l) =>
+            /NODE_AUTH_TOKEN|NPM_TOKEN|secrets\.NPM|secrets\s*\[|toJSON\(\s*secrets|_authToken/i.test(
+              l,
+            ),
+          ),
       )
       .map((w) => w.file);
     expect(withToken).toEqual([]);
