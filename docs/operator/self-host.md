@@ -64,7 +64,35 @@ The reference setup that produced motebit's two staging peers (`motebit-sync-stg
 
 ### Signed discover — strict by default since 2026-07-21 (1.4)
 
-`POST /federation/v1/discover` requests carry a per-hop sender signature since `relay-federation@1.3` (spec §4.1.1). During the 1.3 rollout the receiver default was **tolerant** (`requireDiscoverSignature: false` — an unsigned discover from an un-upgraded neighbor was accepted with a `federation.discover.unsigned` warning). **Since 2026-07-21 (`relay-federation@1.4`, the announced sunset) the default is `true`**: an unsigned inbound discover rejects with `403`. Run `relay-federation@1.3` or later (it always _signs_ its outbound discovers) and your peers keep interoperating with no action. If you must keep accepting unsigned discovers — e.g. you peer with a relay still on < 1.3 — set `requireDiscoverSignature: false` explicitly in your federation config; you then own the cold-audit P0-3b fail-open for your own mesh. The flip was announced 2026-06-21 and executed on schedule, per the relay's deprecation discipline.
+`POST /federation/v1/discover` requests carry a per-hop sender signature since `relay-federation@1.3` (spec §4.1.1). During the 1.3 rollout the receiver default was **tolerant** (`requireDiscoverSignature: false` — an unsigned discover from an un-upgraded neighbor was accepted with a `federation.discover.unsigned` warning). **Since 2026-07-21 (`relay-federation@1.4`, the announced sunset) the default is `true`**: an unsigned inbound discover rejects with `403`. Run `relay-federation@1.3` or later (it always _signs_ its outbound discovers) and your peers keep interoperating with no action. The flip was announced 2026-06-21 and executed on schedule, per the relay's deprecation discipline. Relaxing it no longer helps an older peer: since `relay-federation@1.5` (relay 1.2.0) every other federation message must name its recipient, so a relay below 1.5 cannot peer with this one at all. Upgrade the whole mesh together.
+
+## Upgrading from 1.1.0
+
+1.2.0 carries every relay security fix since May 2026, and the upgrade is not drop-in. Read this before you change the tag.
+
+**Back up first.** Stop the relay, copy the SQLite file cold, and export an encrypted backup of the relay key (`pnpm --filter @motebit/relay relay-key export`, per [`services/relay/RUNBOOK-key-recovery.md`](../../services/relay/RUNBOOK-key-recovery.md)). Migrations v25–v58 run automatically at the first boot, forward-only, with no way back. Some of them change data for good:
+
+- v30 deletes duplicate settlement rows that share a P2P transaction hash (it keeps the earliest).
+- v34–v36 redact stored memory event payloads and the content of memories whose deletion was requested earlier.
+- v37 overwrites every plaintext (unencrypted) conversation and plan field held in the sync tables with `[REDACTED]`. Export anything you need from them first.
+
+On a large database the first boot can take a while (v34–v37 and v46 scan whole tables), so give it a longer health-check grace period and watch the `migration.*` log lines.
+
+**Configuration that now refuses to boot:**
+
+- `MOTEBIT_API_TOKEN` is required. 1.1.0 left the admin, sync and export routes open without it.
+- `MOTEBIT_RELAY_INSECURE_NO_AUTH` is honoured only when `NODE_ENV` is exactly `development` or `test`.
+- Booleans and numbers are parsed strictly: `yes`/`on` and out-of-range values refuse instead of falling back to a default. `X402_TESTNET` now also reads `FALSE` and `0` as mainnet, and mainnet needs `CDP_API_KEY_ID` and `CDP_API_KEY_SECRET`.
+- An x402 network with no RPC URL refuses. Set a keyed `X402_RPC_URL_<network>`; the public defaults are rate-limited.
+
+**Upgrade these together with the relay:**
+
+- **Federation peers.** 1.2.0 speaks `relay-federation@1.5`: every signed message names its recipient and nonces are single-use, so a 1.1.0 peer cannot handshake, heartbeat, forward or settle with it.
+- **Workers and MCP servers.** The relay now authenticates to a worker with its own signed `mcp:call` token, never the master token. A worker on an older `@motebit/mcp-server` answers 401.
+
+**What clients will see change:** migration arrivals return 503 and guardian recovery returns 503 `GUARDIAN_RECOVERY_SUSPENDED` (both contained pending a permanent fix); a withdrawal to an EVM (0x) address returns 400 before any debit. Guardians set before the upgrade carry no provenance (v58 is deliberately not backfilled), so users must set them again under their current key before recovery can ever apply.
+
+**After the first boot:** review `relay_settlement_payee_corrections` rows with `prior_verification_status = 'verified'` (v48 leaves them for you to re-check), review `relay_allocations.review_reason` flags (v55), and read the identity-authority census at `GET /api/v1/admin/identity-authority/census`.
 
 ## Why this exists
 
