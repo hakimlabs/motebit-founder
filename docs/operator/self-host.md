@@ -70,7 +70,19 @@ The reference setup that produced motebit's two staging peers (`motebit-sync-stg
 
 1.2.0 carries every relay security fix since May 2026, and the upgrade is not drop-in. Read this before you change the tag.
 
-**Back up first.** Stop the relay, copy the SQLite file cold, and export an encrypted backup of the relay key (`pnpm --filter @motebit/relay relay-key export`, per [`services/relay/RUNBOOK-key-recovery.md`](../../services/relay/RUNBOOK-key-recovery.md)). Migrations v25–v58 run automatically at the first boot, forward-only, with no way back. Some of them change data for good:
+**What has been tested.** The published 1.1.0 image was run with seeded data (agents, a listing, plaintext sync conversations and plans, a task), stopped, backed up, and the published 1.2.0 image booted on the same database with the same environment. It started, applied v25–v58, kept the relay key and every agent and listing, redacted the plaintext sync fields, and answered 401 to unauthenticated admin and sync routes. Restoring the cold backup and booting 1.1.0 on it brought everything back. Not tested: boot time on a large database, and migrations that had no rows to act on in that test (v30, v34–v36, v48, v55).
+
+**Back up first.** Stop the relay, copy the SQLite file cold, and export an encrypted backup of the relay key. The 1.2.0 image can do this against the 1.1.0 database without changing it:
+
+```bash
+docker run --rm -v /path/to/data:/data \
+  -e MOTEBIT_DB_PATH=/data/motebit.db \
+  -e MOTEBIT_RELAY_KEY_PASSPHRASE='<your key passphrase>' \
+  -e MOTEBIT_RELAY_BACKUP_PASSPHRASE='<a new backup passphrase>' \
+  ghcr.io/motebit/relay:1.2.0 node dist/cli.js relay-key export --out /data/relay-key-backup.json
+```
+
+Store the backup file and its passphrase offsite, separately ([`services/relay/RUNBOOK-key-recovery.md`](../../services/relay/RUNBOOK-key-recovery.md)). Migrations v25–v58 run automatically at the first boot, forward-only. **Rolling back means restoring the cold backup, never just running the old image:** 1.1.0 starts without complaint on an upgraded database and serves the migrated, redacted data. Some migrations change data for good:
 
 - v30 deletes duplicate settlement rows that share a P2P transaction hash (it keeps the earliest).
 - v34–v36 redact stored memory event payloads and the content of memories whose deletion was requested earlier.
@@ -90,7 +102,7 @@ On a large database the first boot can take a while (v34–v37 and v46 scan whol
 - **Federation peers.** 1.2.0 speaks `relay-federation@1.5`: every signed message names its recipient and nonces are single-use, so a 1.1.0 peer cannot handshake, heartbeat, forward or settle with it.
 - **Workers and MCP servers.** The relay now authenticates to a worker with its own signed `mcp:call` token, never the master token. A worker on an older `@motebit/mcp-server` answers 401.
 
-**What clients will see change:** migration arrivals return 503 and guardian recovery returns 503 `GUARDIAN_RECOVERY_SUSPENDED` (both contained pending a permanent fix); a withdrawal to an EVM (0x) address returns 400 before any debit. Guardians set before the upgrade carry no provenance (v58 is deliberately not backfilled), so users must set them again under their current key before recovery can ever apply.
+**What clients will see change:** reading an agent's listing (`GET /api/v1/agents/:id/listing`) now needs a token, where 1.1.0 answered it unauthenticated (discovery stays public); migration arrivals return 503 and guardian recovery returns 503 `GUARDIAN_RECOVERY_SUSPENDED` (both contained pending a permanent fix); a withdrawal to an EVM (0x) address returns 400 before any debit. Guardians set before the upgrade carry no provenance (v58 is deliberately not backfilled), so users must set them again under their current key before recovery can ever apply.
 
 **After the first boot:** review `relay_settlement_payee_corrections` rows with `prior_verification_status = 'verified'` (v48 leaves them for you to re-check), review `relay_allocations.review_reason` flags (v55), and read the identity-authority census at `GET /api/v1/admin/identity-authority/census`.
 
