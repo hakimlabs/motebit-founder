@@ -349,16 +349,57 @@ the pinned `create-motebit@0.8.0` wrapper to the canonical CLI:
 README text in `packages/github-action/README.md` also gets a small sweep.
 See the inline comment in `action.yml` for the exact swap point.
 
-### Emergency Patch
+### Publish authority
 
-```bash
-# Fix the code, then:
-pnpm changeset           # Create changeset
-pnpm version-packages    # Bump versions
-pnpm run build           # Build
-pnpm release             # Publish
-git push --follow-tags   # Push version commits + tags
-```
+In this repo, exactly two jobs can publish to npm, both in `.github/workflows/release.yml`, and
+both wait in the `npm-publish` environment (main only, founder is the required reviewer):
+
+- `train-publish` publishes what the Version Packages PR versioned. It runs after a push only
+  when main carries a public package ahead of npm and no changesets are pending.
+- `security-publish` publishes an exact named list on a manual dispatch (below).
+
+A push to `main` runs `release` (prepare), which versions changesets into the Version Packages
+PR. It has no `id-token` and no publish step, so it cannot publish whatever npm accepts.
+`scripts/__tests__/security-publish.test.ts` fails if any job in any workflow gains an id-token,
+a publish command, or a changesets `publish:` input outside `npm-publish`. The one exception is
+`publish-images.yml`, whose id-token signs container images and which has no npm path.
+
+What the repo cannot enforce, and the founder checks on npmjs.com for every public package:
+
+- **Trusted publishers.** npm allows up to 10 per package. Each one must name motebit/motebit,
+  `release.yml` and environment `npm-publish`, and no other.
+- **Tokens.** Trusted publishing does not disable token publishing. Publishing access should be
+  "Require two-factor authentication and disallow tokens", and the account should hold no
+  write-capable automation tokens.
+
+### Emergency Patch (security publish)
+
+A patch that cannot wait for the train ships through the `security-publish` job. A laptop
+publish carries no provenance.
+
+1. **Rehearse before the fix is public.** Run **Actions → Release → Run workflow** on `main`
+   with main's head SHA, the packages to patch in dependency order, and `dry-run` on. A dry
+   run accepts versions equal to npm's, so it exercises the approval, plan, build, tests, pack
+   and `npm publish --dry-run` on today's main without exposing anything.
+2. **Bump by hand.** In the fix PR, bump the patched packages' versions (dependencies first) and
+   write their CHANGELOG entries. Add no changeset for those packages, and do not run
+   `pnpm version-packages`: the train would bump them again and version every pending changeset.
+3. **Merge, then publish at once.** Dispatch again with the merge commit's SHA and `dry-run` off,
+   and approve. The job refuses unless each version is strictly ahead of npm. It publishes the
+   packed tarballs in order, checks that the registry serves each with the packed sha512 and a
+   provenance attestation, and runs `npm audit signatures` on a clean install. The interval
+   between the merge and this run is the only time the fix is public without a patched
+   package.
+   Just before publishing, the job re-reads main's head and refuses if anything merged after
+   the dispatch; dispatch again for the new head.
+   If the merge's own push also asks for `train-publish` approval (main ahead of npm, no
+   pending changesets), reject that one: the security-publish run is the verified path.
+4. **Tags.** Push the `<name>@<version>` tags yourself. The job has `contents: read`.
+
+The job refuses before building when: main has moved past the SHA; a package is private or listed
+twice; a version is behind npm, a first publish, or (outside a dry run) equal to npm's; a
+dependency is listed after its dependent; or an unlisted public dependency is not on the
+registry. The rules are in `scripts/lib/security-publish.ts`.
 
 ---
 
