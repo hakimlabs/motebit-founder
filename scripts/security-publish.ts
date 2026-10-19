@@ -8,6 +8,10 @@
  *   pack    <out>/plan.json → one tarball per package + <out>/artifacts.json
  *           (name, version, tarball, sha512 integrity). Refuses a tarball whose
  *           manifest is not the planned name@version or still says `workspace:`.
+ *   publish <out>/artifacts.json → `npm publish` each tarball in order with
+ *           provenance; DRY_RUN=true adds `--dry-run` and skips a version npm
+ *           already has (npm refuses that even in a dry run). Writes
+ *           <out>/publish.md for the run summary.
  *   ahead   → `count=<n>` in $GITHUB_OUTPUT: public packages on main ahead of
  *           npm. Exit 1 if the registry does not answer for every package.
  *   verify  <out>/artifacts.json → polls the registry until each version is
@@ -41,19 +45,14 @@ import {
   packagesAhead,
   parsePackageList,
   planSecurityPublish,
+  publishSteps,
   registryQuestions,
+  type PackedArtifact,
   type PlannedPackage,
 } from "./lib/security-publish.js";
 
 const REPO_ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const REGISTRY = "https://registry.npmjs.org";
-
-interface Artifact {
-  name: string;
-  version: string;
-  tarball: string;
-  integrity: string;
-}
 
 function fail(lines: string[]): never {
   for (const line of lines) console.error(`  ✗ ${line}`);
@@ -62,7 +61,7 @@ function fail(lines: string[]): never {
 
 function outDir(): string {
   const dir = process.argv[3];
-  if (!dir) fail(["usage: security-publish.ts <plan|pack|ahead|verify> <out-dir>"]);
+  if (!dir) fail(["usage: security-publish.ts <plan|pack|ahead|publish|verify> <out-dir>"]);
   mkdirSync(dir, { recursive: true });
   return resolve(dir);
 }
@@ -101,7 +100,7 @@ async function ahead(): Promise<void> {
 
 function pack(out: string): void {
   const planned = JSON.parse(readFileSync(join(out, "plan.json"), "utf8")) as PlannedPackage[];
-  const artifacts: Artifact[] = [];
+  const artifacts: PackedArtifact[] = [];
   const problems: string[] = [];
   for (const p of planned) {
     const dest = join(out, "tarballs", p.name.replace("/", "__"));
@@ -128,10 +127,33 @@ function pack(out: string): void {
       problems.push(`${p.name}: the packed manifest still contains a workspace: range`);
     const integrity = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
     console.log(`  ✓ ${p.name}@${p.version} ${integrity}`);
-    artifacts.push({ name: p.name, version: p.version, tarball, integrity });
+    artifacts.push({ name: p.name, version: p.version, tarball, integrity, previous: p.previous });
   }
   if (problems.length > 0) fail(problems);
   writeFileSync(join(out, "artifacts.json"), JSON.stringify(artifacts, null, 2));
+}
+
+function publish(out: string): void {
+  const artifacts = JSON.parse(
+    readFileSync(join(out, "artifacts.json"), "utf8"),
+  ) as PackedArtifact[];
+  const dryRun = process.env.DRY_RUN === "true";
+  const lines: string[] = [];
+  for (const step of publishSteps(artifacts, dryRun)) {
+    if (step.kind === "skip") {
+      console.log(`  - skipped ${step.reason}`);
+      lines.push(`- \`${step.name}@${step.version}\` skipped: already on npm`);
+      continue;
+    }
+    execFileSync("npm", step.args, { stdio: "inherit" });
+    lines.push(`- \`${step.name}@${step.version}\` ${dryRun ? "dry run passed" : "published"}`);
+  }
+  if (dryRun)
+    lines.push(
+      "",
+      "A dry run proves the plan, build, tests and pack. It uploads nothing, so the OIDC publish and the provenance attestation are proven only by a real publish.",
+    );
+  writeFileSync(join(out, "publish.md"), `${lines.join("\n")}\n`);
 }
 
 function npmDist(
@@ -157,7 +179,9 @@ function npmDist(
 }
 
 async function verify(out: string): Promise<void> {
-  const artifacts = JSON.parse(readFileSync(join(out, "artifacts.json"), "utf8")) as Artifact[];
+  const artifacts = JSON.parse(
+    readFileSync(join(out, "artifacts.json"), "utf8"),
+  ) as PackedArtifact[];
   const problems: string[] = [];
   for (const a of artifacts) {
     let dist = null;
@@ -199,8 +223,9 @@ async function main(): Promise<void> {
   if (mode === "plan") await plan(out);
   else if (mode === "pack") pack(out);
   else if (mode === "ahead") await ahead();
+  else if (mode === "publish") publish(out);
   else if (mode === "verify") await verify(out);
-  else fail([`unknown mode ${mode ?? "(none)"}; expected plan, pack, ahead or verify`]);
+  else fail([`unknown mode ${mode ?? "(none)"}; expected plan, pack, ahead, publish or verify`]);
 }
 
 main().catch((err) => {

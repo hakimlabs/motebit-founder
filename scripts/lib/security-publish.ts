@@ -163,3 +163,39 @@ export function packagesAhead(
   }
   return ahead;
 }
+
+export interface PackedArtifact {
+  name: string;
+  version: string;
+  tarball: string;
+  integrity: string;
+  /** The registry's `latest` when the plan was made. */
+  previous: string;
+}
+
+export type PublishStep =
+  | { kind: "publish"; name: string; version: string; args: string[] }
+  | { kind: "skip"; name: string; version: string; reason: string };
+
+/**
+ * What the Publish step does with each packed artifact, in order. A real run
+ * publishes every one. A dry run passes `--dry-run`, except for a version the
+ * registry already has: npm refuses even a dry run over a published version,
+ * so a rehearsal names it and moves on. A dry run uploads nothing, so it
+ * proves neither the OIDC publish nor the provenance attestation; only a real
+ * publish does.
+ */
+export function publishSteps(artifacts: readonly PackedArtifact[], dryRun: boolean): PublishStep[] {
+  return artifacts.map((a) => {
+    if (dryRun && a.version === a.previous)
+      return {
+        kind: "skip",
+        name: a.name,
+        version: a.version,
+        reason: `${a.name}@${a.version} is already on npm; npm refuses even a dry run over a published version`,
+      };
+    const args = ["publish", a.tarball, "--provenance", "--access", "public"];
+    if (dryRun) args.push("--dry-run");
+    return { kind: "publish", name: a.name, version: a.version, args };
+  });
+}

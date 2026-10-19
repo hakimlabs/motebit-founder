@@ -14,7 +14,13 @@ import { describe, it, expect } from "vitest";
 import { parse } from "yaml";
 
 import type { PublishablePackage, RegistryAnswer } from "../lib/publish-freshness.js";
-import { packagesAhead, parsePackageList, planSecurityPublish } from "../lib/security-publish.js";
+import {
+  packagesAhead,
+  parsePackageList,
+  planSecurityPublish,
+  publishSteps,
+  type PackedArtifact,
+} from "../lib/security-publish.js";
 
 function pkg(name: string, version: string, deps: Record<string, string> = {}): PublishablePackage {
   return { name, version, dir: `packages/${name}`, raw: { name, version, dependencies: deps } };
@@ -170,6 +176,8 @@ const jobs = release.doc.jobs!;
 // `npm exec -- changeset publish`.
 const PUBLISH_COMMAND =
   /\b(npm|pnpm|yarn|changeset)\b(\s+(--?\S*|run|exec)(\s+[^-\s]\S*)?)*\s+(publish|release)\b/;
+// The security-publish script's own publish mode, which runs `npm publish`.
+const SCRIPT_PUBLISH = /security-publish\.ts\s+publish\b/;
 // The one job allowed an id-token outside npm-publish: cosign keyless signing
 // of container images, with no npm path (checked below).
 const ID_TOKEN_EXEMPT = new Set(["publish-images.yml:relay"]);
@@ -193,7 +201,7 @@ function canPublish(job: Job, doc: Workflow): string[] {
   if (grantsIdToken(job.permissions ?? doc.permissions)) why.push("id-token: write");
   if (job.uses) why.push(`calls reusable workflow ${job.uses}`);
   for (const step of job.steps ?? []) {
-    if (shellLines(step.run ?? "").some((l) => PUBLISH_COMMAND.test(l)))
+    if (shellLines(step.run ?? "").some((l) => PUBLISH_COMMAND.test(l) || SCRIPT_PUBLISH.test(l)))
       why.push(`publishes in "${step.name}"`);
     if (step.uses?.startsWith("changesets/action") && step.with && "publish" in step.with)
       why.push(`changesets publish: in "${step.name}"`);
@@ -202,6 +210,49 @@ function canPublish(job: Job, doc: Workflow): string[] {
   }
   return why;
 }
+
+describe("publishSteps", () => {
+  const art = (name: string, version: string, previous: string): PackedArtifact => ({
+    name,
+    version,
+    previous,
+    tarball: `/out/${name}.tgz`,
+    integrity: "sha512-x",
+  });
+  const list = [art("@m/crypto", "4.0.1", "4.0.0"), art("@m/verifier", "1.14.2", "1.14.2")];
+
+  it("a real run publishes every artifact, in order, with provenance and no --dry-run", () => {
+    expect(publishSteps(list, false)).toEqual([
+      {
+        kind: "publish",
+        name: "@m/crypto",
+        version: "4.0.1",
+        args: ["publish", "/out/@m/crypto.tgz", "--provenance", "--access", "public"],
+      },
+      {
+        kind: "publish",
+        name: "@m/verifier",
+        version: "1.14.2",
+        args: ["publish", "/out/@m/verifier.tgz", "--provenance", "--access", "public"],
+      },
+    ]);
+  });
+
+  it("a dry run skips a version npm already has and dry-runs one it does not", () => {
+    const steps = publishSteps(list, true);
+    expect(steps[0]).toEqual({
+      kind: "publish",
+      name: "@m/crypto",
+      version: "4.0.1",
+      args: ["publish", "/out/@m/crypto.tgz", "--provenance", "--access", "public", "--dry-run"],
+    });
+    expect(steps[1]).toMatchObject({ kind: "skip", name: "@m/verifier", version: "1.14.2" });
+  });
+
+  it("a real run never skips, even at the registry's version (the plan refuses that first)", () => {
+    expect(publishSteps([art("@m/x", "1.0.0", "1.0.0")], false)[0]!.kind).toBe("publish");
+  });
+});
 
 describe("publish authority across every workflow", () => {
   it("no workflow grants id-token or write-all at the top level", () => {

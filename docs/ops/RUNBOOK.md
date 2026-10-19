@@ -379,22 +379,50 @@ publish carries no provenance.
 
 1. **Rehearse before the fix is public.** Run **Actions → Release → Run workflow** on `main`
    with main's head SHA, the packages to patch in dependency order, and `dry-run` on. A dry
-   run accepts versions equal to npm's, so it exercises the approval, plan, build, tests, pack
-   and `npm publish --dry-run` on today's main without exposing anything.
-2. **Bump by hand.** In the fix PR, bump the patched packages' versions (dependencies first) and
-   write their CHANGELOG entries. Add no changeset for those packages, and do not run
-   `pnpm version-packages`: the train would bump them again and version every pending changeset.
-3. **Merge, then publish at once.** Dispatch again with the merge commit's SHA and `dry-run` off,
-   and approve. The job refuses unless each version is strictly ahead of npm. It publishes the
-   packed tarballs in order, checks that the registry serves each with the packed sha512 and a
-   provenance attestation, and runs `npm audit signatures` on a clean install. The interval
-   between the merge and this run is the only time the fix is public without a patched
-   package.
+   run accepts versions equal to npm's, so it exercises the approval, plan, build, tests and
+   pack on today's main without exposing anything. npm refuses even `npm publish --dry-run`
+   over a version it already has, so the Publish step skips those and the run summary says so.
+   A dry run uploads nothing: the OIDC publish and the provenance attestation are proven only
+   by the real publish in step 4.
+2. **Bump by hand.** On the private branch, bump the patched packages' versions (dependencies
+   first) and write their CHANGELOG entries. Add no changeset for those packages (an empty
+   changeset satisfies `check-changeset-required`), and do not run `pnpm version-packages`:
+   the train would bump them again and version every pending changeset.
+3. **Bring the fix to main.** The advisory's temporary private fork cannot merge into `main`:
+   the ruleset has no bypass, and nobody should add one. Its code also never runs CI. The route
+   below makes the fix public before a patched package exists, so it is a fallback, not a
+   default.
+   - **Decide the disclosure risk first.** The founder decides, and records on the advisory,
+     whether the fix may be public before the packages are: how severe and how exploitable
+     the bug is, and whether users can mitigate it meanwhile. A neutral commit message hides
+     the history, not the diff, and the window can run longer than planned (a failing check,
+     a queue backlog, a registry outage).
+   - Run `pnpm build`, `pnpm check` and the affected packages' tests locally before opening
+     the PR, to avoid exposure from predictable CI failures. The public PR's own CI and
+     merge-queue checks must still pass before merging; any failure blocks the release.
+   - Squash the private branch into ONE commit on main's current head with a neutral message
+     (`fix(<scope>): <area> hardening`, the patched versions, "details follow in a security
+     advisory"). Check that its tree under `packages/ services/ apps/ spec/` equals the
+     private branch's. Push only that commit's SHA, never the private branch: its commit
+     messages describe the vulnerability.
+   - Open a public PR from it, approve it once CI is green, and queue it. Close the private PR
+     (no comment; the private fork forbids them).
+     From the PR opening to step 4 the fix is public without a patched package. Have the dispatch
+     ready before you queue.
+4. **Publish at once.** As soon as the PR merges, dispatch again with the merge commit's SHA and
+   `dry-run` off, and approve. The job refuses unless each version is strictly ahead of npm. It
+   publishes the packed tarballs in order, checks that the registry serves each with the packed
+   sha512 and a provenance attestation, and runs `npm audit signatures` on a clean install.
    Just before publishing, the job re-reads main's head and refuses if anything merged after
    the dispatch; dispatch again for the new head.
    If the merge's own push also asks for `train-publish` approval (main ahead of npm, no
    pending changesets), reject that one: the security-publish run is the verified path.
-4. **Tags.** Push the `<name>@<version>` tags yourself. The job has `contents: read`.
+5. **Disclose.** Fill in the advisory's patched versions, then request the CVE and publish. If
+   the page's button does not publish, the API does (founder login):
+   `gh api -X POST repos/motebit/motebit/security-advisories/<GHSA>/cve`, then
+   `gh api -X PATCH repos/motebit/motebit/security-advisories/<GHSA> -f state=published`.
+6. **Tags.** Push the `<name>@<version>` tags at the merge commit yourself. The job has
+   `contents: read`.
 
 The job refuses before building when: main has moved past the SHA; a package is private or listed
 twice; a version is behind npm, a first publish, or (outside a dry run) equal to npm's; a
