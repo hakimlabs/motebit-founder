@@ -630,13 +630,7 @@ jobs:
           echo "main is $HEAD, as authorized"
 
       - name: Publish (dependency order)
-        run: |
-          set -euo pipefail
-          DRY=""
-          [ "$DRY_RUN" = "true" ] && DRY="--dry-run"
-          jq -r '.[].tarball' "$OUT/artifacts.json" | while read -r tgz; do
-            npm publish "$tgz" --provenance --access public $DRY
-          done
+        run: npx tsx scripts/security-publish.ts publish "$OUT"
 
       - name: Verify the registry serves what was packed, with provenance
         if: inputs.dry-run == false
@@ -649,4 +643,5 @@ jobs:
             echo "### Security publish (dry-run: $DRY_RUN)"
             echo "Authorized commit: \`$INPUT_SHA\` · approved run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             [ -f "$OUT/artifacts.json" ] && jq -r '.[] | "- `\(.name)@\(.version)` `\(.integrity)`"' "$OUT/artifacts.json"
+            [ -f "$OUT/publish.md" ] && { echo; cat "$OUT/publish.md"; }
           } >> "$GITHUB_STEP_SUMMARY" || true
