@@ -389,9 +389,17 @@ publish carries no provenance.
    changeset satisfies `check-changeset-required`), and do not run `pnpm version-packages`:
    the train would bump them again and version every pending changeset.
 3. **Bring the fix to main.** The advisory's temporary private fork cannot merge into `main`:
-   the ruleset has no bypass, and nobody should add one. Its code also never runs CI.
-   - Run `pnpm build`, `pnpm check` and the affected packages' tests locally first, so the
-     public PR's CI is a formality.
+   the ruleset has no bypass, and nobody should add one. Its code also never runs CI. The route
+   below makes the fix public before a patched package exists, so it is a fallback, not a
+   default.
+   - **Decide the disclosure risk first.** The founder decides, and records on the advisory,
+     whether the fix may be public before the packages are: how severe and how exploitable
+     the bug is, and whether users can mitigate it meanwhile. A neutral commit message hides
+     the history, not the diff, and the window can run longer than planned (a failing check,
+     a queue backlog, a registry outage).
+   - Run `pnpm build`, `pnpm check` and the affected packages' tests locally before opening
+     the PR, to avoid exposure from predictable CI failures. The public PR's own CI and
+     merge-queue checks must still pass before merging; any failure blocks the release.
    - Squash the private branch into ONE commit on main's current head with a neutral message
      (`fix(<scope>): <area> hardening`, the patched versions, "details follow in a security
      advisory"). Check that its tree under `packages/ services/ apps/ spec/` equals the
