@@ -31,6 +31,7 @@ import {
 } from "./identity-binding.js";
 import type { AuthEvent } from "./auth-events.js";
 import { createLogger } from "./logger.js";
+import { BOUND_ISSUER_SQL, isBoundRow, readVerifiedCredentials } from "./credential-reads.js";
 
 const logger = createLogger({ service: "credentials" });
 
@@ -421,6 +422,9 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       credential_json: string;
       issued_at: number;
     }>;
+    // EVIDENCE, not trust: the owner sees every credential stored under its
+    // id, including one stored before the issuer binding whose named issuer
+    // never signed it (GHSA-7pgw-2976-r236). `issuer_bound` says which.
     if (typeFilter) {
       rows = db
         .prepare(
@@ -440,6 +444,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       credential_type: r.credential_type,
       credential: JSON.parse(r.credential_json) as VerifiableCredential,
       issued_at: r.issued_at,
+      issuer_bound: isBoundRow(r),
     }));
 
     return c.json({ motebit_id: mid, credentials });
@@ -463,25 +468,35 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     let rows: Array<{
       credential_json: string;
     }>;
+    // The relay signs this presentation, so it includes only credentials that
+    // verify in full (signature, issuer binding, validity window). A row stored
+    // before the issuer binding (GHSA-7pgw-2976-r236) can name an issuer that
+    // never signed it; the binding is applied in SQL so the LIMIT counts only
+    // bound rows, then each credential is re-verified.
     if (typeFilter) {
-      rows = db
-        .prepare(
-          "SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND credential_type = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, typeFilter, limit) as typeof rows;
+      rows = await readVerifiedCredentials<(typeof rows)[number]>(
+        "current",
+        db,
+        `SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND credential_type = ? AND ${BOUND_ISSUER_SQL} ORDER BY issued_at DESC LIMIT ?`,
+        mid,
+        typeFilter,
+        limit,
+      );
     } else {
-      rows = db
-        .prepare(
-          "SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at DESC LIMIT ?",
-        )
-        .all(mid, limit) as typeof rows;
-    }
-
-    if (rows.length === 0) {
-      throw new HTTPException(404, { message: "No credentials found for this agent" });
+      rows = await readVerifiedCredentials<(typeof rows)[number]>(
+        "current",
+        db,
+        `SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL} ORDER BY issued_at DESC LIMIT ?`,
+        mid,
+        limit,
+      );
     }
 
     const credentials = rows.map((r) => JSON.parse(r.credential_json) as VerifiableCredential);
+
+    if (credentials.length === 0) {
+      throw new HTTPException(404, { message: "No credentials found for this agent" });
+    }
 
     const relayKeys = getRelayKeypair(relayIdentity);
     const vp = await createPresentation(credentials, relayKeys.privateKey, relayKeys.publicKey);
@@ -557,7 +572,19 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
         typeof vc.credentialSubject === "object" && "id" in vc.credentialSubject
           ? (vc.credentialSubject as { id: unknown }).id
           : undefined;
-      const issuerDid = typeof vc.issuer === "string" ? vc.issuer : "";
+      // The issuer DID, string or `{ id }` form (W3C VC 2.0 permits both). Normalized
+      // here so the self-issuance check and the indexed `issuer_did` read the same
+      // DID the verifier binds to the proof's signer: reading only the string form
+      // let `{ id: <subject's own did:key> }` pass the self-issuance check below.
+      const rawIssuer: unknown = vc.issuer;
+      const issuerDid =
+        typeof rawIssuer === "string"
+          ? rawIssuer
+          : rawIssuer !== null &&
+              typeof rawIssuer === "object" &&
+              typeof (rawIssuer as { id?: unknown }).id === "string"
+            ? (rawIssuer as { id: string }).id
+            : "";
 
       // Self-attestation rejection: issuer === subject carries no trust signal. Compared by
       // IDENTITY as well as by DID string: the `did:key` of V's own key issuing about

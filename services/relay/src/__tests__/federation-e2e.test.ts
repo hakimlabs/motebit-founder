@@ -838,6 +838,8 @@ describe("Federation E2E", () => {
               id: `did:motebit:${agent.motebitId}`,
               hardware_attestation: { platform: "secure_enclave" },
             },
+            // The relay stores only credentials whose signer is their issuer (v59).
+            proof: { verificationMethod: "did:key:z-fed-issuer-test#key-1" },
           }),
           issuedAt,
         );

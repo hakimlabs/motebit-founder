@@ -1,5 +1,11 @@
 # create-motebit Changelog
 
+## 1.2.12
+
+### Patch Changes
+
+- Bundles `@motebit/crypto` 4.0.1.
+
 ## 1.2.11
 
 _1.2.10 is reserved by the pending main release train, so this security release takes 1.2.11._

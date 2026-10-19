@@ -1,5 +1,14 @@
 # motebit CLI Changelog
 
+## 2.2.2
+
+### Patch Changes
+
+- **Security release.** The CLI bundles `@motebit/crypto` and the relay that `motebit relay up` runs, so it carries both halves of the fix.
+
+  - **Bundled `@motebit/crypto` 4.0.1.** Credential and presentation verification require the proof's signer to be the issuer (or holder). See the `@motebit/crypto` 4.0.1 changelog.
+  - **Self-hosted relay.** `POST /api/v1/credentials/submit` refuses a credential whose signer is not its issuer. A one-way migration removes stored credentials that fail that rule and were never anchored; anchored ones are kept as evidence, so existing inclusion proofs still verify. Database triggers refuse any new row that fails the rule. Discovery badges, routing weight, departure counts, the signed presentation and the migration export count or present only credentials signed by their issuer. The owner's credential list shows every stored credential with an `issuer_bound` flag, and the migration export lists what it left out in `excluded_credentials`.
+
 ## 2.2.1
 
 _2.2.0 is reserved by the pending main release train, so this security release takes 2.2.1._

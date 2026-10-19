@@ -1,5 +1,17 @@
 # @motebit/crypto Changelog
 
+## 4.0.1
+
+### Patch Changes
+
+- **Security: a credential or presentation verifies only when its signer is its issuer (or holder).** Credential verification now requires the proof's signer to be the credential's issuer.
+
+  `verifyVerifiableCredential`, `verifyVerifiablePresentation`, and `verify()` (its credential and presentation results) now check that the DID part of `proof.verificationMethod` (before `#`) equals the issuer's DID. The issuer may be a string or an object with an `id`. A presentation's signer must likewise be its `holder`. For `did:key` this is exact DID equality, and the verification key is then derived from that DID. An issuer or holder using any other DID method is refused (fail-closed), because this package cannot resolve which keys such a DID authorizes.
+
+  `verify()` reports a failed binding as an error at path `issuer` (credential) or `holder` (presentation), and `CredentialVerifyResult.issuer` now also reports the `id` of an object-form issuer.
+
+  Credentials and presentations issued through this package's own issuance functions (`issueGradientCredential`, `issueReputationCredential`, `issueTrustCredential`, `createPresentation`) already set the issuer or holder to the signing key's `did:key`, so they are unaffected. A caller who signs a credential with `signVerifiableCredential` must set `issuer` to `publicKeyToDidKey(publicKey)` of the signing key, or the credential will not verify.
+
 ## 4.0.0
 
 ### Major Changes

@@ -2514,7 +2514,7 @@ export interface WitnessOmissionDisputeVerifyResult {
 
 // Warnings were encountered during analysis:
 //
-// src/credentials.ts:394:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
+// src/credentials.ts:439:5 - (ae-forgotten-export) The symbol "HardwareAttestationClaim_2" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

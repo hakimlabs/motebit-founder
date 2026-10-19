@@ -184,6 +184,8 @@ import type {
   VerifiableCredential,
   VerifiablePresentation,
 } from "./credentials.js";
+// Internal binding helpers (deliberately NOT re-exported).
+import { namedDidOf, proofSignerIs } from "./credentials.js";
 import type { SkillEnvelope } from "@motebit/protocol";
 import { verifySkillEnvelopeDetailed, decodeSkillSignaturePublicKey } from "./skills.js";
 import type { SkillVerifyReason } from "./skills.js";
@@ -289,7 +291,7 @@ export interface CredentialVerifyResult extends BaseResult {
    * imply "not revoked": it sets this flag, and a consumer that needs revocation
    * MUST check `credentialStatus.id` against its own source (or call
    * `verifyVerifiableCredential` with an injected `isRevoked` seam). `valid` here
-   * means "signature + temporal validity", NOT "not revoked".
+   * means "signed by its issuer + temporal validity", NOT "not revoked".
    */
   revocation_unchecked?: boolean;
   /**
@@ -3113,8 +3115,15 @@ async function verifyCredential(
     errors.push({ message: "Credential proof verification failed", path: "proof" });
   }
 
-  // Extract issuer DID
-  const issuerDid = typeof vc.issuer === "string" ? vc.issuer : undefined;
+  // Bind the signer to the issuer. The proof verifies under the key its own
+  // `verificationMethod` names, so a valid signature alone says nothing about
+  // WHO issued the credential: the signer must be the issuer (did:key only;
+  // any other issuer DID method fails closed).
+  const issuerDid = namedDidOf(vc.issuer);
+  const issuerBound = proofSignerIs(vc.proof, issuerDid);
+  if (!issuerBound) {
+    errors.push({ message: "Credential issuer is not the proof signer", path: "issuer" });
+  }
   const subjectId = vc.credentialSubject?.id;
 
   // Hardware-attestation verification (additive — absent claim = no
@@ -3167,7 +3176,7 @@ async function verifyCredential(
 
   return {
     type: "credential",
-    valid: proofValid && !expired && !notYetValid,
+    valid: proofValid && issuerBound && !expired && !notYetValid,
     credential: vc,
     issuer: issuerDid,
     subject: subjectId,
@@ -3198,6 +3207,12 @@ async function verifyPresentation(
   if (!envelopeValid) {
     errors.push({ message: "Presentation proof verification failed", path: "proof" });
   }
+  // The envelope's signer must be the holder it names (the same binding as a
+  // credential's issuer).
+  const holderBound = proofSignerIs(vp.proof, namedDidOf(vp.holder));
+  if (!holderBound) {
+    errors.push({ message: "Presentation holder is not the presentation signer", path: "holder" });
+  }
 
   // Verify each contained credential
   const credentialResults: CredentialVerifyResult[] = [];
@@ -3213,7 +3228,7 @@ async function verifyPresentation(
     }
   }
 
-  const allValid = envelopeValid && credentialResults.every((c) => c.valid);
+  const allValid = envelopeValid && holderBound && credentialResults.every((c) => c.valid);
 
   return {
     type: "presentation",
