@@ -51,6 +51,11 @@ import { admitKey, recordIdentityKey, verificationKeyFor } from "./identity-keys
 import { liftRevocation } from "./identity-revocation.js";
 import { refuseInvalidIds } from "./id-bounds.js";
 import type { CloseIdentityConnections, ReconcileKeyConnections } from "./connection-ports.js";
+import {
+  BOUND_ISSUER_SQL,
+  readBoundCredentials,
+  readVerifiedCredentials,
+} from "./credential-reads.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
 
@@ -439,9 +444,14 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // Credential count
     let credCount: { cnt: number } | undefined;
     try {
-      credCount = db
-        .prepare("SELECT COUNT(*) as cnt FROM relay_credentials WHERE subject_motebit_id = ?")
-        .get(motebitId) as { cnt: number } | undefined;
+      // The relay attests to credentials their named issuer signed, never to a
+      // stored forgery (credential-reads.ts).
+      const credRows = readBoundCredentials<{ credential_json: string }>(
+        db,
+        `SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL}`,
+        motebitId,
+      );
+      credCount = { cnt: credRows.length };
     } catch {
       /* table may not exist */
     }
@@ -512,12 +522,25 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // Advance state
     updateMigrationState(db, owner, migration.token_id, "exporting");
 
-    // Fetch all credentials for this agent
-    const credentials = db
-      .prepare(
-        "SELECT credential_id, credential_json FROM relay_credentials WHERE subject_motebit_id = ? ORDER BY issued_at ASC",
-      )
-      .all(motebitId) as Array<{ credential_id: string; credential_json: string }>;
+    // The export carries credentials to another relay as credentials, so it
+    // includes only those whose signature and issuer binding verify; expired
+    // ones are kept (the agent's history, spec/migration-v1.md §6.2). The
+    // destination verifies again. What was left out is
+    // reported beside the bundle (`excluded_credentials`), never silently.
+    const storedCount = (
+      db
+        .prepare("SELECT COUNT(*) AS n FROM relay_credentials WHERE subject_motebit_id = ?")
+        .get(motebitId) as { n: number }
+    ).n;
+    const credentials = await readVerifiedCredentials<{
+      credential_id: string;
+      credential_json: string;
+    }>(
+      "history",
+      db,
+      `SELECT credential_id, credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL} ORDER BY issued_at ASC`,
+      motebitId,
+    );
 
     const parsedCredentials = credentials.map(
       (row) => JSON.parse(row.credential_json) as Record<string, unknown>,
@@ -564,6 +587,9 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     return c.json({
       ok: true,
       credential_bundle: bundle,
+      // Stored credentials not exported because they do not verify in full
+      // (GHSA-7pgw-2976-r236). Outside the bundle, which the agent signs.
+      excluded_credentials: storedCount - credentials.length,
     });
   });
 

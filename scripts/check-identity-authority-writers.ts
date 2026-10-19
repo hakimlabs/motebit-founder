@@ -260,6 +260,15 @@ const WRITERS: readonly Writer[] = [
     principal: MIGRATION + " (v43: stamp `delisted_at` on rows already revoked)",
   },
   {
+    file: R + "migrations.ts",
+    verb: "DELETE",
+    table: "relay_credentials",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v59: remove stored credentials whose proof signer is not their named issuer — never credentials from that issuer; GHSA-7pgw-2976-r236)",
+  },
+  {
     file: R + "credentials.ts",
     verb: "REPLACE",
     table: "relay_revoked_credentials",

@@ -1,5 +1,12 @@
 # @motebit/crypto-appattest
 
+## 1.0.41
+
+### Patch Changes
+
+- Updated dependencies
+  - @motebit/crypto@4.0.1
+
 ## 1.0.40
 
 _1.0.39 is reserved by the pending main release train, so this security release takes 1.0.40._

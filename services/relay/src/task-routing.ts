@@ -47,6 +47,7 @@ import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit
 import { createLogger } from "./logger.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { verificationKeyFor } from "./identity-keys.js";
+import { BOUND_ISSUER_SQL, readBoundCredentials } from "./credential-reads.js";
 
 const logger = createLogger({ service: "relay", module: "task-routing" });
 const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
@@ -312,22 +313,6 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
        ORDER BY recorded_at DESC LIMIT 100`,
     );
 
-    // Credential aggregation: fetch peer-issued reputation VCs for each candidate.
-    // The issuer trust callback resolves did:key URIs to trust scores from agent_trust.
-    const credStmt = db.prepare(
-      `SELECT credential_json FROM relay_credentials
-       WHERE subject_motebit_id = ? AND credential_type = 'AgentReputationCredential'
-       ORDER BY issued_at DESC LIMIT 50`,
-    );
-    // Hardware-attestation aggregation: peer-issued AgentTrustCredentials carrying
-    // `hardware_attestation` claims. Phase 1 of the hardware-attestation peer flow.
-    // The aggregator filters self-issued claims (issuer === subject.id) by the same
-    // rule the reputation aggregator uses; only peer-verified claims drive routing.
-    const trustCredStmt = db.prepare(
-      `SELECT credential_json FROM relay_credentials
-       WHERE subject_motebit_id = ? AND credential_type = 'AgentTrustCredential'
-       ORDER BY issued_at DESC LIMIT 50`,
-    );
     const issuerTrustStmt = callerMotebitId
       ? db.prepare(
           `SELECT trust_level FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = (
@@ -410,7 +395,17 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       // Aggregate peer-issued credentials for this candidate
       let credential_reputation: CandidateProfile["credential_reputation"];
       try {
-        const credRows = credStmt.all(mid) as Array<{ credential_json: string }>;
+        // Peer-issued reputation VCs for this candidate, only those their named
+        // issuer signed (credential-reads.ts). The issuer trust callback resolves
+        // did:key URIs to trust scores from agent_trust.
+        const credRows = readBoundCredentials<{ credential_json: string }>(
+          db,
+          `SELECT credential_json FROM relay_credentials
+           WHERE subject_motebit_id = ? AND credential_type = 'AgentReputationCredential'
+             AND ${BOUND_ISSUER_SQL}
+           ORDER BY issued_at DESC LIMIT 50`,
+          mid,
+        );
         if (credRows.length > 0) {
           const vcs = credRows
             .map((r) => {
@@ -435,7 +430,18 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       // graph-routing.ts:setEdge — peer-verified claims dominate self-attestation.
       let hardware_attestation_aggregate: CandidateProfile["hardware_attestation_aggregate"];
       try {
-        const trustRows = trustCredStmt.all(mid) as Array<{ credential_json: string }>;
+        // Peer-issued AgentTrustCredentials carrying `hardware_attestation`
+        // claims (phase 1 of the hardware-attestation peer flow). The aggregator
+        // filters self-issued claims by the same rule as reputation; only
+        // peer-verified claims drive routing.
+        const trustRows = readBoundCredentials<{ credential_json: string }>(
+          db,
+          `SELECT credential_json FROM relay_credentials
+           WHERE subject_motebit_id = ? AND credential_type = 'AgentTrustCredential'
+             AND ${BOUND_ISSUER_SQL}
+           ORDER BY issued_at DESC LIMIT 50`,
+          mid,
+        );
         if (trustRows.length > 0) {
           const vcs = trustRows
             .map((r) => {

@@ -1,5 +1,12 @@
 # @motebit/crypto-tpm
 
+## 1.1.40
+
+### Patch Changes
+
+- Updated dependencies
+  - @motebit/crypto@4.0.1
+
 ## 1.1.39
 
 _1.1.38 is reserved by the pending main release train, so this security release takes 1.1.39._

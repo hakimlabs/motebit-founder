@@ -217,6 +217,7 @@ import {
 import { createLogger } from "./logger.js";
 import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
 import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
+import { BOUND_ISSUER_SQL, readBoundCredentials } from "./credential-reads.js";
 
 const logger = createLogger({ service: "agents" });
 
@@ -286,29 +287,34 @@ export function enrichWithHardwareAttestation<
 >(agents: T[], db: DatabaseDriver): T[] {
   if (agents.length === 0) return agents;
   const placeholders = agents.map(() => "?").join(",");
-  const rows = db
-    .prepare(
-      `SELECT credential_id, subject_motebit_id, credential_json, issued_at
-       FROM relay_credentials
-       WHERE credential_type = 'AgentTrustCredential'
-         AND subject_motebit_id IN (${placeholders})
-       ORDER BY issued_at DESC`,
-    )
-    .all(...agents.map((a) => a.motebit_id)) as Array<{
+  const boundRows = readBoundCredentials<{
     credential_id: string;
     subject_motebit_id: string;
     credential_json: string;
     issued_at: number;
-  }>;
-  if (rows.length === 0) return agents;
+  }>(
+    db,
+    `SELECT credential_id, subject_motebit_id, credential_json, issued_at
+       FROM relay_credentials
+       WHERE credential_type = 'AgentTrustCredential'
+         AND subject_motebit_id IN (${placeholders})
+         AND ${BOUND_ISSUER_SQL}
+       ORDER BY issued_at DESC`,
+    ...agents.map((a) => a.motebit_id),
+  );
+  if (boundRows.length === 0) return agents;
 
   const revokedStmt = db.prepare("SELECT 1 FROM relay_revoked_credentials WHERE credential_id = ?");
   type Projection = NonNullable<AgentTrustRecord["hardware_attestation"]>;
   const projectedByAgent = new Map<string, Projection>();
-  for (const row of rows) {
+  for (const row of boundRows) {
     if (projectedByAgent.has(row.subject_motebit_id)) continue; // already have a more-recent row
     if (revokedStmt.get(row.credential_id) != null) continue;
-    let parsed: { credentialSubject?: { hardware_attestation?: HardwareAttestationClaim } };
+    let parsed: {
+      issuer?: unknown;
+      proof?: { verificationMethod?: unknown };
+      credentialSubject?: { hardware_attestation?: HardwareAttestationClaim };
+    };
     try {
       parsed = JSON.parse(row.credential_json) as typeof parsed;
     } catch {
