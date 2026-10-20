@@ -42,7 +42,7 @@ Or open **[receipt.computer](https://receipt.computer)** (it loads a signed samp
 
 Persistent cryptographic identity that survives across devices, providers, and time. Trust accumulated through signed execution receipts. Governance enforced at the agent's boundary. Verifiable proof of what got done.
 
-MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay, and AP2 records who authorized each payment. Motebit says who the agent is across every provider, what it has done, and what its owner's policy allows. The intelligence is pluggable; the identity is the asset. The derivation from droplet physics onward lives in [DOCTRINE.md](DOCTRINE.md) and [the thesis](https://docs.motebit.com/docs/introduction).
+MCP says which tools an agent can use and how that access is authorized. A2A says how agents find each other and talk. x402 and AP2 say how they pay, AP2 with cryptographically verifiable mandates. Motebit says who the agent is across every provider, what it has done, and what its owner's policy allows. The intelligence is pluggable; the identity is the asset. The derivation from droplet physics onward lives in [DOCTRINE.md](DOCTRINE.md) and [the thesis](https://docs.motebit.com/docs/introduction).
 
 |                | Agents today   | Motebit                                                           |
 | -------------- | -------------- | ----------------------------------------------------------------- |

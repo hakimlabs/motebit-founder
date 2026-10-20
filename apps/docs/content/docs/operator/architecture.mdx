@@ -13,7 +13,7 @@ The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supportin
   cites={[{ label: "identity-v1 §1", file: "spec/identity-v1.md", section: 1 }]}
 />
 
-MCP says what an agent can do. A2A says how agents talk. x402 and AP2 say how they pay — AP2 with user-signed mandates that bind an agent key to each authorization. None of those give an agent an identity it owns across time, devices and providers, trust accumulated from its own past work, or signed receipts for the work itself across delegation hops. Motebit is additive — it slots underneath those protocols, providing the persistent cryptographic identity, signed-receipt trust ledger, and boundary policy gate the others do not specify.
+MCP says which tools an agent can use and how that access is authorized. A2A says how agents find each other and talk. x402 and AP2 say how they pay — AP2 with cryptographically verifiable mandates, binding an agent key for autonomous transactions. Motebit works on a complementary problem: an identity its owner controls that persists across time, devices and providers, trust accumulated first-person from its own past work, policy-governed execution, and signed receipts for the work itself across delegation hops. It is additive — it slots underneath those protocols rather than replacing them.
 
 <DiagramFigure
   src="license-tiers"
