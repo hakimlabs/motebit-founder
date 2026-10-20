@@ -47,7 +47,10 @@ import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit
 import { createLogger } from "./logger.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { verificationKeyFor } from "./identity-keys.js";
-import { BOUND_ISSUER_SQL, readBoundCredentials } from "./credential-reads.js";
+import {
+  readBoundReputationCredentialsForRouting,
+  readBoundTrustCredentialsForRouting,
+} from "./credential-store.js";
 
 const logger = createLogger({ service: "relay", module: "task-routing" });
 const circuitBreakerLogger = createLogger({ service: "relay", module: "circuit-breaker" });
@@ -396,16 +399,9 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
       let credential_reputation: CandidateProfile["credential_reputation"];
       try {
         // Peer-issued reputation VCs for this candidate, only those their named
-        // issuer signed (credential-reads.ts). The issuer trust callback resolves
+        // issuer signed (credential-store.ts). The issuer trust callback resolves
         // did:key URIs to trust scores from agent_trust.
-        const credRows = readBoundCredentials<{ credential_json: string }>(
-          db,
-          `SELECT credential_json FROM relay_credentials
-           WHERE subject_motebit_id = ? AND credential_type = 'AgentReputationCredential'
-             AND ${BOUND_ISSUER_SQL}
-           ORDER BY issued_at DESC LIMIT 50`,
-          mid,
-        );
+        const credRows = readBoundReputationCredentialsForRouting(db, mid);
         if (credRows.length > 0) {
           const vcs = credRows
             .map((r) => {
@@ -434,14 +430,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
         // claims (phase 1 of the hardware-attestation peer flow). The aggregator
         // filters self-issued claims by the same rule as reputation; only
         // peer-verified claims drive routing.
-        const trustRows = readBoundCredentials<{ credential_json: string }>(
-          db,
-          `SELECT credential_json FROM relay_credentials
-           WHERE subject_motebit_id = ? AND credential_type = 'AgentTrustCredential'
-             AND ${BOUND_ISSUER_SQL}
-           ORDER BY issued_at DESC LIMIT 50`,
-          mid,
-        );
+        const trustRows = readBoundTrustCredentialsForRouting(db, mid);
         if (trustRows.length > 0) {
           const vcs = trustRows
             .map((r) => {

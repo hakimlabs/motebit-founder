@@ -131,6 +131,7 @@ import {
   type P2pAdmission,
 } from "./p2p-payee.js";
 import { createLogger } from "./logger.js";
+import { insertRelayIssuedCredentialEvidence } from "./credential-store.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
@@ -1612,19 +1613,14 @@ export async function handleReceiptIngestion(
           }
 
           if (credentialRow) {
-            moteDb.db
-              .prepare(
-                `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
-               VALUES (?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                credentialRow.credential_id,
-                credentialRow.subject,
-                credentialRow.issuer,
-                credentialRow.type,
-                credentialRow.json,
-                credentialRow.issued_at,
-              );
+            insertRelayIssuedCredentialEvidence(moteDb.db, {
+              credentialId: credentialRow.credential_id,
+              subjectMotebitId: credentialRow.subject,
+              issuerDid: credentialRow.issuer,
+              credentialType: credentialRow.type,
+              credentialJson: credentialRow.json,
+              issuedAt: credentialRow.issued_at,
+            });
             credential_id = credentialRow.credential_id;
           }
 

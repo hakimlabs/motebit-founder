@@ -13,7 +13,11 @@
  *     verify routes go red (they inherit the binding; nothing else enforces it);
  *   - the relay's issuer normalization reverted to the string-only read — the
  *     object-issuer self-issuance case goes red;
- *   - the market aggregators' issuer normalization reverted — market red.
+ *   - the market aggregators' issuer normalization reverted — market red;
+ *   - the credential store (credential-store.ts): a bound read made raw, a
+ *     verified read's validity mode flipped, ambiguous JSON accepted — relay
+ *     red; a raw read of the table outside the store, a bound read filtering
+ *     after its LIMIT, the raw reader exported — the boundary test red.
  *
  * Exit 1 if any tamper stays green or cannot apply.
  *
@@ -49,23 +53,21 @@ const VERIFY_BINDING = {
   to: "    valid: proofValid && !expired && !notYetValid,",
 };
 
+const STORE = "services/relay/src/credential-store.ts";
+const BOUNDARY_TEST = vitest("@motebit/relay", "src/__tests__/credential-store-boundary.test.ts");
 const RAW_READER = {
-  file: "services/relay/src/credential-reads.ts",
-  from: "export function readBoundCredentials<",
-  to: "export function readAllCredentials<T>(db: { prepare(sql: string): { all(...params: unknown[]): unknown[] } }, sql: string, ...params: unknown[]): T[] { return db.prepare(sql).all(...params) as T[]; }\nexport function readBoundCredentials<",
+  file: STORE,
+  from: "\nfunction readBoundCredentials<",
+  to: "\nfunction readAllCredentials<T>(db: ReadDb, sql: string, ...params: unknown[]): T[] { return db.prepare(sql).all(...params) as T[]; }\nfunction readBoundCredentials<",
 };
 /**
- * One bound read bypasses BOTH layers of the boundary: its call becomes a raw
- * read and its SQL loses the binding predicate. (Either layer alone still
- * filters, by design, so a tamper of one layer proves nothing.)
+ * One bound read in the store bypasses BOTH layers of the boundary: its call
+ * becomes a raw read and its SQL loses the binding predicate. (Either layer
+ * alone still filters, by design, so a tamper of one layer proves nothing.)
  */
-const bypass = (name, file, importFrom, importTo, edits) => ({
+const bypass = (name, edits) => ({
   name,
-  edits: [
-    RAW_READER,
-    { file, from: importFrom, to: importTo },
-    ...edits.map((e) => ({ file, ...e })),
-  ],
+  edits: [RAW_READER, ...edits.map((e) => ({ file: STORE, ...e }))],
   ...RELAY_TEST,
 });
 
@@ -207,38 +209,26 @@ const TAMPERS = [
     ],
     ...RELAY_TEST,
   },
-  bypass(
-    "relay discovery: the hardware-attestation badge reads raw rows",
-    "services/relay/src/agents.ts",
-    'import { BOUND_ISSUER_SQL, readBoundCredentials } from "./credential-reads.js";',
-    'import { BOUND_ISSUER_SQL, readAllCredentials, readBoundCredentials } from "./credential-reads.js";',
-    [
-      {
-        from: "  const boundRows = readBoundCredentials<{",
-        to: "  const boundRows = readAllCredentials<{",
-      },
-      {
-        from: "         AND ${BOUND_ISSUER_SQL}\n       ORDER BY issued_at DESC`,",
-        to: "       ORDER BY issued_at DESC`,",
-      },
-    ],
-  ),
-  bypass(
-    "relay: the departure attestation counts raw rows",
-    "services/relay/src/migration.ts",
-    "  BOUND_ISSUER_SQL,\n  readBoundCredentials,\n  readVerifiedCredentials,\n} from",
-    "  BOUND_ISSUER_SQL,\n  readAllCredentials,\n  readBoundCredentials,\n  readVerifiedCredentials,\n} from",
-    [
-      {
-        from: "      const credRows = readBoundCredentials<",
-        to: "      const credRows = readAllCredentials<",
-      },
-      {
-        from: "relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL}`,\n        motebitId,",
-        to: "relay_credentials WHERE subject_motebit_id = ?`,\n        motebitId,",
-      },
-    ],
-  ),
+  bypass("relay discovery: the hardware-attestation badge reads raw rows", [
+    {
+      from: '  const placeholders = subjectMotebitIds.map(() => "?").join(",");\n  return readBoundCredentials<{',
+      to: '  const placeholders = subjectMotebitIds.map(() => "?").join(",");\n  return readAllCredentials<{',
+    },
+    {
+      from: "         AND subject_motebit_id IN (${placeholders})\n         AND ${BOUND_ISSUER_SQL}\n",
+      to: "         AND subject_motebit_id IN (${placeholders})\n",
+    },
+  ]),
+  bypass("relay: the departure attestation counts raw rows", [
+    {
+      from: "export function countBoundCredentialsForSubject(db: ReadDb, subjectMotebitId: string): number {\n  return readBoundCredentials<",
+      to: "export function countBoundCredentialsForSubject(db: ReadDb, subjectMotebitId: string): number {\n  return readAllCredentials<",
+    },
+    {
+      from: "relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL}`,\n    subjectMotebitId,\n  ).length;",
+      to: "relay_credentials WHERE subject_motebit_id = ?`,\n    subjectMotebitId,\n  ).length;",
+    },
+  ]),
   {
     name: "registry: an unregistered read spelled lowercase and quoted",
     edits: [
@@ -248,12 +238,54 @@ const TAMPERS = [
         to: "  if (boundRows.length === 0) return agents;\n  void db.prepare('select 1 from \"relay_credentials\"');",
       },
     ],
-    ...vitest("@motebit/relay", "src/__tests__/credential-reads-registry.test.ts"),
+    ...BOUNDARY_TEST,
+  },
+  {
+    name: "boundary: a raw read of the table in task-routing.ts",
+    edits: [
+      {
+        file: "services/relay/src/task-routing.ts",
+        from: "        const credRows = readBoundReputationCredentialsForRouting(db, mid);",
+        to: '        const credRows = readBoundReputationCredentialsForRouting(db, mid);\n        void db.prepare("SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ?").all(mid);',
+      },
+    ],
+    ...BOUNDARY_TEST,
+  },
+  {
+    name: "boundary: a new door calls a store writer",
+    edits: [
+      {
+        file: "services/relay/src/agents.ts",
+        from: 'import { readBoundTrustCredentialsForSubjects } from "./credential-store.js";',
+        to: 'import {\n  insertRelayIssuedCredentialEvidence,\n  readBoundTrustCredentialsForSubjects,\n} from "./credential-store.js";',
+      },
+      {
+        file: "services/relay/src/agents.ts",
+        from: "  if (boundRows.length === 0) return agents;",
+        to: "  if (boundRows.length === 0) return agents;\n  if (agents.length < 0) insertRelayIssuedCredentialEvidence(db, null as never);",
+      },
+    ],
+    ...BOUNDARY_TEST,
+  },
+  {
+    name: "boundary: the store exports its raw bound reader",
+    edits: [
+      {
+        file: STORE,
+        from: "\nfunction readBoundCredentials<",
+        to: "\nexport function readBoundCredentials<",
+      },
+    ],
+    ...BOUNDARY_TEST,
   },
   {
     name: "relay: the owner's list reports every credential as bound",
     edits: [
-      { file: RELAY, from: "      issuer_bound: isBoundRow(r),", to: "      issuer_bound: true," },
+      {
+        file: STORE,
+        from: "  return rows.map((r) => ({ ...r, issuer_bound: isBoundRow(r) }));",
+        to: "  return rows.map((r) => ({ ...r, issuer_bound: true }));",
+      },
     ],
     ...RELAY_TEST,
   },
@@ -261,9 +293,9 @@ const TAMPERS = [
     name: "relay: the presentation ignores the validity window (an expired credential is presented)",
     edits: [
       {
-        file: RELAY,
-        from: 'await readVerifiedCredentials<(typeof rows)[number]>(\n        "current",\n        db,\n        `SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL} ORDER BY',
-        to: 'await readVerifiedCredentials<(typeof rows)[number]>(\n        "history",\n        db,\n        `SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL} ORDER BY',
+        file: STORE,
+        from: '  }\n  return readVerifiedCredentials<{ credential_json: string }>(\n    "current",',
+        to: '  }\n  return readVerifiedCredentials<{ credential_json: string }>(\n    "history",',
       },
     ],
     ...RELAY_TEST,
@@ -272,9 +304,9 @@ const TAMPERS = [
     name: "relay: the export withholds expired honest credentials (spec/migration-v1.md §6.2)",
     edits: [
       {
-        file: "services/relay/src/migration.ts",
-        from: '    }>(\n      "history",\n      db,',
-        to: '    }>(\n      "current",\n      db,',
+        file: STORE,
+        from: '  return readVerifiedCredentials<{ credential_id: string; credential_json: string }>(\n    "history",',
+        to: '  return readVerifiedCredentials<{ credential_id: string; credential_json: string }>(\n    "current",',
       },
     ],
     ...RELAY_TEST,
@@ -294,18 +326,18 @@ const TAMPERS = [
     name: "registry: a routing read filters only after its LIMIT",
     edits: [
       {
-        file: "services/relay/src/task-routing.ts",
+        file: STORE,
         from: "WHERE subject_motebit_id = ? AND credential_type = 'AgentReputationCredential'\n             AND ${BOUND_ISSUER_SQL}",
         to: "WHERE subject_motebit_id = ? AND credential_type = 'AgentReputationCredential'",
       },
     ],
-    ...vitest("@motebit/relay", "src/__tests__/credential-reads-registry.test.ts"),
+    ...BOUNDARY_TEST,
   },
   {
     name: "boundary: ambiguous (non-canonical, duplicate-key) JSON accepted",
     edits: [
       {
-        file: "services/relay/src/credential-reads.ts",
+        file: STORE,
         from: "  if (JSON.stringify(parsed) !== text) return null;",
         to: "",
       },

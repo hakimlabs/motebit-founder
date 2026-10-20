@@ -52,10 +52,10 @@ import { liftRevocation } from "./identity-revocation.js";
 import { refuseInvalidIds } from "./id-bounds.js";
 import type { CloseIdentityConnections, ReconcileKeyConnections } from "./connection-ports.js";
 import {
-  BOUND_ISSUER_SQL,
-  readBoundCredentials,
-  readVerifiedCredentials,
-} from "./credential-reads.js";
+  countBoundCredentialsForSubject,
+  countCredentialEvidenceForSubject,
+  readVerifiedCredentialsForExport,
+} from "./credential-store.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
 
@@ -445,13 +445,8 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     let credCount: { cnt: number } | undefined;
     try {
       // The relay attests to credentials their named issuer signed, never to a
-      // stored forgery (credential-reads.ts).
-      const credRows = readBoundCredentials<{ credential_json: string }>(
-        db,
-        `SELECT credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL}`,
-        motebitId,
-      );
-      credCount = { cnt: credRows.length };
+      // stored forgery (credential-store.ts).
+      credCount = { cnt: countBoundCredentialsForSubject(db, motebitId) };
     } catch {
       /* table may not exist */
     }
@@ -527,20 +522,8 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // ones are kept (the agent's history, spec/migration-v1.md §6.2). The
     // destination verifies again. What was left out is
     // reported beside the bundle (`excluded_credentials`), never silently.
-    const storedCount = (
-      db
-        .prepare("SELECT COUNT(*) AS n FROM relay_credentials WHERE subject_motebit_id = ?")
-        .get(motebitId) as { n: number }
-    ).n;
-    const credentials = await readVerifiedCredentials<{
-      credential_id: string;
-      credential_json: string;
-    }>(
-      "history",
-      db,
-      `SELECT credential_id, credential_json FROM relay_credentials WHERE subject_motebit_id = ? AND ${BOUND_ISSUER_SQL} ORDER BY issued_at ASC`,
-      motebitId,
-    );
+    const storedCount = countCredentialEvidenceForSubject(db, motebitId);
+    const credentials = await readVerifiedCredentialsForExport(db, motebitId);
 
     const parsedCredentials = credentials.map(
       (row) => JSON.parse(row.credential_json) as Record<string, unknown>,

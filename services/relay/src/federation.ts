@@ -608,7 +608,7 @@ export function getRevocationEventsSince(db: DatabaseDriver, sinceTs: number): R
  * act, stated and enforced on its own door — `POST
  * /api/v1/agents/:motebitId/revoke-credential` answers 403 "Only the
  * credential subject or issuer can revoke", checked against
- * `relay_credentials.issuer_did`. A peer is neither, `credential_id` is not
+ * the credential store's `issuer_did`. A peer is neither, `credential_id` is not
  * covered by the signature verified above, and nothing in the event asserts
  * that the sender speaks for either principal. The table also has no foreign
  * key and the write is `INSERT OR IGNORE`, so a named id need not exist: an

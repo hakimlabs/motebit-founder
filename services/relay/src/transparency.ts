@@ -32,6 +32,7 @@ import type { SignedTransparencyDeclaration } from "@motebit/protocol";
 import { TRANSPARENCY_SPEC_ID, TRANSPARENCY_SUITE } from "@motebit/protocol";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
+import { CREDENTIAL_STORE_TABLE } from "./credential-store.js";
 import { anchorSubmitPacerFor } from "./anchor-submit-pacing.js";
 import { submitRecordedAnchor, type AnchorBroadcastHooks } from "./anchor-broadcasts.js";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -108,7 +109,7 @@ export const DECLARATION_CONTENT = {
         "relay_settlement_proofs",
         "relay_receipts",
         "relay_pending_withdrawals",
-        "relay_credentials",
+        CREDENTIAL_STORE_TABLE,
         "relay_credential_anchor_batches",
         "relay_revocation_events",
         "relay_revoked_credentials",
