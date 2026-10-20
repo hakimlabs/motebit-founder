@@ -22,9 +22,18 @@
  * review matter.
  *
  * Inside the store, every bound or verified read applies `BOUND_ISSUER_SQL`
- * in its WHERE clause, so a LIMIT counts bound rows only, and every exported
- * function's name says which kind it is. The behaviour of each bound reader
- * is proven in `credential-issuer-binding.test.ts`.
+ * in its WHERE clause, so a LIMIT counts bound rows only; every Bound/Verified
+ * export reads only through the private bound/verified readers (the owner's
+ * status list marks every row instead); the number of statements is pinned
+ * (`STORE_MENTIONS`), so a new one is reviewed rather than added silently; and
+ * every exported function's name says which kind it is.
+ *
+ * Who may use the store is a closed set too (`REFERENCES`): every name it
+ * exports, and every file outside it that names one, counted, imports
+ * included. Counting names, not call shapes, catches a call, a reference
+ * passed into a deps object, an aliased import and a new wrapper export alike;
+ * `import * as` and `export *` of the store are refused. The behaviour of each
+ * bound reader is proven in `credential-issuer-binding.test.ts`.
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -45,20 +54,55 @@ const OWNERS: Record<string, string> = {
 const BOUND_CALL =
   /read(?:Bound|Verified)Credentials(?:<[^>]*>)?\(\s*(?:"(?:current|history)"\s*,\s*)?db\s*,\s*(["'`])([\s\S]*?)\1/g;
 /**
- * Every store function that WRITES the table, and the only files that may call
- * it (call sites per file). A write is authority over a stored row, so the
- * callers are a closed set: a new caller is a new door, and must be added here
- * with its reason (check-identity-authority-writers registers the SQL itself).
+ * Every name the store exports, and every file outside it that names it, with
+ * the count of mentions (imports included). A closed set: a new export, a new
+ * file, or one more mention of an export (a second call, the function passed
+ * by reference into a deps object, an aliased import) fails until it is
+ * registered here with its reason. A WRITER's callers are new doors onto a
+ * stored row (check-identity-authority-writers registers the SQL itself); a
+ * Bound/Verified reader's callers are trust consumers; an Evidence reader
+ * handed to a trust consumer is the mistake this table makes visible in review.
+ * Counting names rather than call shapes is what makes the set closed.
  */
-const WRITER_CALLERS: Record<string, Record<string, number>> = {
-  // credentials/submit: the owner is a BoundIdentity (#850).
-  insertSubmittedCredential: { "src/credentials.ts": 1 },
-  // The relay issuing its own reputation credential from a verified receipt.
-  insertRelayIssuedCredentialEvidence: { "src/tasks.ts": 1, "src/federation-callbacks.ts": 1 },
-  // Credential anchoring: the loop's batch cut and the schema column.
-  assignCredentialEvidenceToBatch: { "src/credential-anchoring.ts": 1 },
-  addCredentialEvidenceAnchorColumn: { "src/credential-anchoring.ts": 1 },
+const REFERENCES: Record<string, Record<string, number>> = {
+  // The binding rule, re-exported by the shim for credential-issuer-binding.test.ts.
+  BOUND_ISSUER_SQL: { "src/credential-reads.ts": 1 },
+  isBoundRow: { "src/credential-reads.ts": 1 },
+  boundCredentialRows: { "src/credential-reads.ts": 1 },
+  // The transparency declaration names the table it retains.
+  CREDENTIAL_STORE_TABLE: { "src/transparency.ts": 2 },
+  // Trust consumers (bound / verified reads).
+  readBoundReputationCredentialsForRouting: { "src/task-routing.ts": 2 },
+  readBoundTrustCredentialsForRouting: { "src/task-routing.ts": 2 },
+  readBoundTrustCredentialsForSubjects: { "src/agents.ts": 2 }, // discovery's hardware badge
+  countBoundCredentialsForSubject: { "src/migration.ts": 2 }, // departure attestation
+  readVerifiedCredentialsForPresentation: { "src/credentials.ts": 2 },
+  readVerifiedCredentialsForExport: { "src/migration.ts": 2 },
+  listOwnerCredentialsWithBoundStatus: { "src/credentials.ts": 2 }, // every row, marked
+  // Writers: each caller is a door.
+  insertSubmittedCredential: { "src/credentials.ts": 4 }, // credentials/submit (BoundIdentity owner, #850); re-exported
+  insertRelayIssuedCredentialEvidence: { "src/tasks.ts": 2, "src/federation-callbacks.ts": 2 }, // the relay's own reputation credential
+  assignCredentialEvidenceToBatch: { "src/credential-anchoring.ts": 2 },
+  addCredentialEvidenceAnchorColumn: { "src/credential-anchoring.ts": 2 },
+  // Evidence reads (confer nothing).
+  getCredentialEvidenceHolding: {},
+  getCredentialEvidenceParties: { "src/credentials.ts": 2 }, // revoke authority: who issued / holds it
+  countCredentialEvidenceForSubject: { "src/migration.ts": 2 }, // the export's stored-row accounting
+  listUnanchoredCredentialEvidence: { "src/credential-anchoring.ts": 2 },
+  countUnanchoredCredentialEvidence: { "src/credential-anchoring.ts": 3 },
+  oldestUnanchoredCredentialEvidenceIssuedAt: { "src/credential-anchoring.ts": 2 },
+  getCredentialEvidenceWithBatch: { "src/credential-anchoring.ts": 2 },
+  listCredentialEvidenceInBatch: { "src/credential-anchoring.ts": 2 },
+  getCredentialEvidenceBatchId: { "src/credential-anchoring.ts": 2 },
+  CredentialEvidenceRow: {},
+  CredentialEvidenceLeaf: {},
 };
+/**
+ * Mentions of the table inside the store. Pinned, so a statement added to
+ * the store fails until it is counted here: a bound read that skips the
+ * binding is caught by review of exactly that change, never added silently.
+ */
+const STORE_MENTIONS = 24;
 /** Exported store functions whose names need not say their kind, and why. */
 const NAME_EXEMPT: Record<string, string> = {
   insertSubmittedCredential:
@@ -132,34 +176,74 @@ describe("one module owns the credential table", () => {
     ).toEqual([]);
   });
 
-  it("every store writer is registered, and called only from its registered doors", () => {
-    // A function body runs from its `export function` to the next doc comment
-    // or export, so doc text never counts as a write.
-    const writers = [
+  it("every store export is registered, and named only from its registered files", () => {
+    const exported = [
       ...store.matchAll(
-        /export\s+(?:async\s+)?function\s+(\w+)([\s\S]*?)(?=\n\/\*\*|\nexport\s|$)/g,
+        /export\s+(?:async\s+)?(?:function|const|let|var|class|type|interface|enum)\s+(\w+)/g,
       ),
     ]
-      .filter((m) => /\b(INSERT|UPDATE|DELETE|REPLACE|ALTER)\b/.test(m[2]!))
       .map((m) => m[1]!)
       .sort();
-    expect(writers, "register each store writer in WRITER_CALLERS with its callers").toEqual(
-      Object.keys(WRITER_CALLERS).sort(),
+    expect(exported, "register each store export in REFERENCES with its files").toEqual(
+      Object.keys(REFERENCES).sort(),
     );
     const found: Record<string, Record<string, number>> = {};
-    for (const name of writers) {
+    for (const name of exported) {
       found[name] = {};
-      const call = new RegExp(`(?<!function\\s)\\b${name}\\(`, "g");
+      const mention = new RegExp(`\\b${name}\\b`, "g");
       for (const path of scanned) {
         const file = relative(ROOT, path);
         if (file === STORE) continue;
-        const n = readFileSync(path, "utf8").match(call)?.length ?? 0;
+        const n = readFileSync(path, "utf8").match(mention)?.length ?? 0;
         if (n > 0) found[name][file] = n;
       }
     }
     expect(
       found,
-      "a new caller of a store writer is a new door: add it to WRITER_CALLERS with its reason",
-    ).toEqual(WRITER_CALLERS);
+      "a new file or mention of a store export is a new door or consumer: register it in REFERENCES with its reason",
+    ).toEqual(REFERENCES);
+  });
+
+  it("nothing imports the store wholesale or re-exports it in bulk", () => {
+    // `import * as store` / `export * from` would let a name travel unseen.
+    const bulk = scanned
+      .filter((path) => relative(ROOT, path) !== STORE)
+      .filter((path) =>
+        /(import\s*\*\s*as\s+\w+|export\s*\*(\s*as\s+\w+)?)\s*from\s*["'][^"']*credential-store/.test(
+          readFileSync(path, "utf8"),
+        ),
+      )
+      .map((path) => relative(ROOT, path));
+    expect(bulk).toEqual([]);
+  });
+
+  it("the store's statements are counted, and every bound or verified export reads through the binding", () => {
+    expect(
+      store.match(MENTION)?.length,
+      "a statement was added to or removed from the store: review it, then update STORE_MENTIONS",
+    ).toBe(STORE_MENTIONS);
+    const bodies = [
+      ...store.matchAll(
+        /export\s+(?:async\s+)?function\s+(\w+)([\s\S]*?)(?=\n\/\*\*|\nexport\s|$)/g,
+      ),
+    ].filter(
+      (m) => /Bound|Verified/.test(m[1]!) && !/^(isBoundRow|boundCredentialRows)$/.test(m[1]!),
+    );
+    expect(bodies.length).toBeGreaterThan(0);
+    // The owner's own list shows every row with its status instead of hiding
+    // unbound ones (#1131 review 5): it reads raw and must mark each row.
+    const STATUS_READERS = new Set(["listOwnerCredentialsWithBoundStatus"]);
+    const bad = bodies
+      .filter((m) =>
+        STATUS_READERS.has(m[1]!)
+          ? !/\bisBoundRow\(/.test(m[2]!)
+          : /\.prepare\s*\(/.test(m[2]!) ||
+            !/\bread(?:Bound|Verified)Credentials\s*(?:<[^>]*>)?\(/.test(m[2]!),
+      )
+      .map((m) => m[1]!);
+    expect(
+      bad,
+      "a Bound/Verified export must read only through readBoundCredentials / readVerifiedCredentials, never db.prepare",
+    ).toEqual([]);
   });
 });
