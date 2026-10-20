@@ -421,8 +421,9 @@ export function IdentityTab({
           >
             Anyone with this string can sign as your motebit forever and spend any SOL at your
             sovereign address. Save it in a password manager (1Password, Bitwarden, paper backup)
-            and never paste it in chat, email, or screenshots. Lose it without a paired device or
-            guardian — the identity is gone, no recovery path. Auto-hides after 60 seconds.
+            and never paste it in chat, email, or screenshots. Lose it without a paired device and
+            the identity is gone: guardian recovery is currently suspended on the reference relay,
+            so there is no other recovery path. Auto-hides after 60 seconds.
           </Text>
         </>
       ) : null}
