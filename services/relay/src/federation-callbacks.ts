@@ -44,6 +44,7 @@ import { defaultPeerFetch, signFederationRequest } from "./federation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./index.js";
 import { createLogger } from "./logger.js";
+import { insertRelayIssuedCredentialEvidence } from "./credential-store.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import { bindP2pProofToTask, p2pProofKey } from "./idempotency.js";
@@ -470,18 +471,14 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
                 );
                 const credentialType =
                   vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
-                moteDb.db
-                  .prepare(
-                    "INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at) VALUES (?, ?, ?, ?, ?, ?)",
-                  )
-                  .run(
-                    crypto.randomUUID(),
-                    verified.originRelay,
-                    vc.issuer,
-                    credentialType,
-                    JSON.stringify(vc),
-                    Date.now(),
-                  );
+                insertRelayIssuedCredentialEvidence(moteDb.db, {
+                  credentialId: crypto.randomUUID(),
+                  subjectMotebitId: verified.originRelay,
+                  issuerDid: vc.issuer,
+                  credentialType,
+                  credentialJson: JSON.stringify(vc),
+                  issuedAt: Date.now(),
+                });
               } catch {
                 /* best-effort */
               }

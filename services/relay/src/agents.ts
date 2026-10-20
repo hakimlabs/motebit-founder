@@ -217,7 +217,7 @@ import {
 import { createLogger } from "./logger.js";
 import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
 import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
-import { BOUND_ISSUER_SQL, readBoundCredentials } from "./credential-reads.js";
+import { readBoundTrustCredentialsForSubjects } from "./credential-store.js";
 
 const logger = createLogger({ service: "agents" });
 
@@ -263,7 +263,7 @@ export function enrichWithCallerTrust<T extends Record<string, unknown> & { mote
 /**
  * Layer the most-recent verified `hardware_attestation` claim onto each
  * agent in a discover result list. The claim is read from the relay's
- * `relay_credentials` index (the same pool `aggregateHardwareAttestation`
+ * credential store (the same pool `aggregateHardwareAttestation`
  * routes against in `task-routing.ts`) — most-recent peer-issued
  * `AgentTrustCredential` per subject, revocation-filtered, self-issued
  * already filtered at `/credentials/submit`.
@@ -277,7 +277,7 @@ export function enrichWithCallerTrust<T extends Record<string, unknown> & { mote
  *
  * Federation merge passes through unchanged — peer relays may already
  * have populated `hardware_attestation` on their merged-in agents from
- * THEIR `relay_credentials`. We only attach when we have a local claim
+ * THEIR credential store. We only attach when we have a local claim
  * AND the agent has none yet, so peer-provided HA on cross-relay
  * agents is preserved (that peer's HA store is more authoritative for
  * agents we've never directly transacted with).
@@ -286,21 +286,9 @@ export function enrichWithHardwareAttestation<
   T extends Record<string, unknown> & { motebit_id: string },
 >(agents: T[], db: DatabaseDriver): T[] {
   if (agents.length === 0) return agents;
-  const placeholders = agents.map(() => "?").join(",");
-  const boundRows = readBoundCredentials<{
-    credential_id: string;
-    subject_motebit_id: string;
-    credential_json: string;
-    issued_at: number;
-  }>(
+  const boundRows = readBoundTrustCredentialsForSubjects(
     db,
-    `SELECT credential_id, subject_motebit_id, credential_json, issued_at
-       FROM relay_credentials
-       WHERE credential_type = 'AgentTrustCredential'
-         AND subject_motebit_id IN (${placeholders})
-         AND ${BOUND_ISSUER_SQL}
-       ORDER BY issued_at DESC`,
-    ...agents.map((a) => a.motebit_id),
+    agents.map((a) => a.motebit_id),
   );
   if (boundRows.length === 0) return agents;
 
