@@ -765,6 +765,119 @@ jobs:
           test "$OUTCOME" = "failure"
           test "$VALID" = "false"
 
+  desktop-rust:
+    # Compile and test the desktop Rust crate (apps/desktop/src-tauri). No other
+    # ci.yml job touches Cargo, so a cargo PR could be green on every check and
+    # not compile: Dependabot's #1129 paired tauri 2.11.1 with tauri-runtime
+    # 2.12.2 (19 errors in the tauri crate) and nothing noticed (#1149). The
+    # only other Rust build is release-desktop.yml, on a desktop-v* tag push.
+    # `tauri build --debug --no-bundle` also runs the Tauri CLI's npm-to-Rust
+    # version-mismatch check and its frontendDist check (the dist/node_modules
+    # asset layout Tauri CLI 2.12 rejects), which cargo alone never reaches.
+    #
+    # Scoped like github-action-smoke: the job always runs, and its own first
+    # step decides whether there is anything to build, so the pinned `changes`
+    # job stays untouched and the job REPORTS on every event. Out of scope it
+    # concludes success with every later step skipped; in scope a failure
+    # fails the job. So it can be made a required check without blocking an
+    # unrelated PR or stalling the merge queue. A diff that cannot be computed
+    # builds (never skips). The scope is what the build reads beyond the
+    # workspace packages:
+    #   apps/desktop/src-tauri/   the crate: Cargo.toml/.lock, build.rs,
+    #                             tauri.conf.json, sidecar resources, icons
+    #   apps/desktop/package.json the @tauri-apps/api + cli ranges the
+    #                             mismatch check compares with Cargo.lock
+    #   apps/desktop/vite.config.ts, index.html, public/
+    #                             the frontendDist layout tauri build checks
+    #   pnpm-lock.yaml            the resolved @tauri-apps/* npm versions (and
+    #                             vite and its plugins)
+    #   .github/workflows/ci.yml  this job's own definition
+    # On push to main the diff base is the push's `before`, so a merge that
+    # touched the scope is re-proven on main. That run also seeds the
+    # main-branch cargo cache PR runs restore from (a cache a PR run saves is
+    # visible only to that PR). Linux and Windows stay in release-desktop.yml;
+    # macOS compile and test is the cheap guard.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      # A smaller, faster cached target/: no incremental artifacts (useless on
+      # a fresh runner) and no debuginfo in the dev and test profiles.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - id: scope
+        name: Detect desktop Rust / Tauri build input changes vs base
+        env:
+          DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name == 'push' && github.event.before || format('origin/{0}', github.base_ref) }}
+        run: |
+          run=false
+          if ! changed=$(git diff --name-only "$DIFF_BASE...HEAD"); then
+            echo "::warning::could not diff against '$DIFF_BASE'; building the desktop crate rather than skipping it"
+            run=true
+          elif echo "$changed" | grep -qE '^apps/desktop/src-tauri/|^apps/desktop/(package\.json|vite\.config\.ts|index\.html)$|^apps/desktop/public/|^pnpm-lock\.yaml$|^\.github/workflows/ci\.yml$'; then
+            run=true
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "desktop Rust / Tauri build inputs touched vs '$DIFF_BASE': $run"
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4
+        if: steps.scope.outputs.run == 'true'
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        if: steps.scope.outputs.run == 'true'
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        if: steps.scope.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Cache cargo registry, git deps and target/
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            apps/desktop/src-tauri/target/
+          key: desktop-rust-macos-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            desktop-rust-macos-
+
+      - name: Install dependencies
+        if: steps.scope.outputs.run == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: cargo check
+        if: steps.scope.outputs.run == 'true'
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --locked --all-targets
+
+      - name: cargo test
+        if: steps.scope.outputs.run == 'true'
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked
+
+      - name: Build the desktop frontend's workspace dependencies
+        # Every package @motebit/desktop depends on, not desktop itself: tauri's
+        # beforeBuildCommand (`pnpm vite build`) bundles the frontend from
+        # those packages' dist/.
+        if: steps.scope.outputs.run == 'true'
+        run: pnpm turbo run build --filter="@motebit/desktop^..."
+
+      - name: tauri build (debug, no bundle)
+        if: steps.scope.outputs.run == 'true'
+        working-directory: apps/desktop
+        run: pnpm exec tauri build --debug --no-bundle
+
   sibling-audit:
     # A required check: runs on the PR and again in the merge queue, where the
     # diff base is the group's parent commit (main, or the entry ahead of it).
