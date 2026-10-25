@@ -22,12 +22,13 @@ export const ANTHROPIC_MODELS = [
   "claude-sonnet-5-5",
   "claude-sonnet-5",
   "claude-sonnet-4-6",
+  "claude-haiku-5-5",
   "claude-haiku-4-5-20251001",
   "claude-opus-4-5-20251101",
   "claude-sonnet-4-5-20250929",
 ] as const;
 
-/** OpenAI models: gpt-5.4 (strongest), gpt-5.4-mini (default), gpt-5.4-nano (fast). */
+/** OpenAI models: gpt-5.4 (strongest, and the default), gpt-5.4-mini, gpt-5.4-nano (fast). */
 export const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
 
 /** Google models: 2.5 pro (strongest), 2.5 flash (default), 2.5 flash-lite (fast). */
@@ -186,10 +187,12 @@ export const PROXY_MODELS = [
 // === Default Models ===
 
 /** Default Anthropic model — the picker's `recommended` row (#654). */
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
 
-/** Default OpenAI model. */
-export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
+/** Default OpenAI model. The full model, not mini: the BYOK user pays for the
+ *  turn, and the default answers for motebit's quality, so it is the best
+ *  general model the vendor serves (reviewed 2026-10-25). */
+export const DEFAULT_OPENAI_MODEL = "gpt-5.4";
 
 /** Default Google model. */
 export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";
@@ -502,7 +505,7 @@ export function defaultModelForProvider(provider: ModelDefaultProvider): string 
  */
 export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
   anthropic: "2026-12-31",
-  openai: "2026-10-31",
+  openai: "2026-12-31",
   google: "2026-10-31",
   deepseek: "2026-10-31",
   groq: "2026-10-31",
@@ -538,8 +541,8 @@ export interface AnthropicPickerOption {
  *  (asserted in tests). */
 export const ANTHROPIC_PICKER: readonly AnthropicPickerOption[] = [
   { id: "claude-opus-5-5", label: "Claude Opus 5.5 — most capable", tier: "strongest" },
-  { id: DEFAULT_ANTHROPIC_MODEL, label: "Claude Sonnet 5 — recommended", tier: "default" },
-  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — fastest", tier: "fast" },
+  { id: DEFAULT_ANTHROPIC_MODEL, label: "Claude Sonnet 5.5 — recommended", tier: "default" },
+  { id: "claude-haiku-5-5", label: "Claude Haiku 5.5 — fastest", tier: "fast" },
 ] as const;
 
 /** The picker's model id for a tier. */

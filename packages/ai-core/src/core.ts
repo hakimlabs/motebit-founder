@@ -595,10 +595,11 @@ export function modelSupportsExtendedThinking(model: string): boolean {
  * motebit.com incident — see ResolvedTaskConfig); this guard makes the
  * illegal request unrepresentable at the body build itself, whatever any
  * caller configured. Sonnet 5 is included: it rejects NON-default values,
- * and omitting is the only always-valid shape.
+ * and omitting is the only always-valid shape. So is Haiku 5.5 (non-default
+ * sampling values and `budget_tokens` both 400), unlike Haiku 4.5.
  */
 export function modelRejectsSamplingParams(model: string): boolean {
-  return /claude-(?:opus-(?:4-[7-9]|[5-9]\b|\d\d)|sonnet-(?:[5-9]\b|\d\d)|fable|mythos)/i.test(
+  return /claude-(?:opus-(?:4-[7-9]|[5-9]\b|\d\d)|(?:sonnet|haiku)-(?:[5-9]\b|\d\d)|fable|mythos)/i.test(
     model,
   );
 }

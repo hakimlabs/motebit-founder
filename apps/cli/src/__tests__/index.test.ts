@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
+import {
+  DEFAULT_ANTHROPIC_MODEL,
+  DEFAULT_LOCAL_SERVER_MODEL,
+  DEFAULT_OPENAI_MODEL,
+} from "@motebit/sdk";
 import {
   parseCliArgs,
   printHelp,
@@ -59,7 +63,7 @@ describe("parseCliArgs", () => {
   it("parses openai provider", () => {
     const config = parseCliArgs(["--provider", "openai"]);
     expect(config.provider).toBe("openai");
-    expect(config.model).toBe("gpt-5.4-mini");
+    expect(config.model).toBe(DEFAULT_OPENAI_MODEL);
   });
 
   it("throws on unknown provider", () => {
