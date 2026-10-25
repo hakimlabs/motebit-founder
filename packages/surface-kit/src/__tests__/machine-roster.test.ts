@@ -2137,8 +2137,16 @@ describe("property — a machine the sovereign retired never ends active at the 
     "old-key-add-while-current",
   ] as const;
 
-  it("over 300 seeded sequences of 12 steps (old-key lines may land between the link and a late hook)", async () => {
-    for (let seed = 1; seed <= 300; seed++) {
+  // 300 seeded sequences of 12 steps, ONE TEST PER SEED (#1147). This was
+  // one test looping over all 300 under a single 180 s budget: ~10 s of pure
+  // Ed25519 CPU (the real law re-verified at every step) that a loaded
+  // pre-push run stretched past 180 s. The sequences, steps and assertions
+  // are unchanged; each seed now carries only its own ~35 ms under the
+  // default per-test budget, and a failure is named by its seed.
+  const SEEDS = Array.from({ length: 300 }, (_, i) => i + 1);
+  it.each(SEEDS)(
+    "seed %i: a 12-step sequence (old-key lines may land between the link and a late hook)",
+    async (seed) => {
       const rnd = prng(seed * 7919);
       const relay = new FakeRelay();
       const keys: KeyPair[] = [await generateKeypair()];
@@ -2266,8 +2274,8 @@ describe("property — a machine the sovereign retired never ends active at the 
           expect(carried, `seed ${seed}: ${trace.join(" → ")}`).toBe(false);
         }
       }
-    }
-  }, 180_000);
+    },
+  );
 });
 
 // ── #785 round 1 (precision) ─────────────────────────────────────────
