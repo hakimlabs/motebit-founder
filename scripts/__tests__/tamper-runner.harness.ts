@@ -80,7 +80,15 @@ export async function setupFixture(): Promise<Fx> {
   cpSync(FIXTURE, repo, { recursive: true });
   const json = (rel: string, v: unknown): void =>
     writeFileSync(join(repo, rel), `${JSON.stringify(v, null, 2)}\n`);
-  json("package.json", { name: "fxroot", private: true });
+  // The monorepo's pnpm, pinned: with no `packageManager` a corepack-shimmed
+  // pnpm resolves, in the fresh HOME the runner gives each slot, to whatever
+  // pnpm is latest on the registry — a native pnpm (12.x) that puts the
+  // command it execs in a process group of its own — so what a cell runs "in
+  // the test's own process group" would depend on the registry (#1160).
+  const { packageManager } = JSON.parse(readFileSync(join(MONOREPO, "package.json"), "utf8")) as {
+    packageManager?: string;
+  };
+  json("package.json", { name: "fxroot", private: true, packageManager });
   json("packages/fx/package.json", {
     name: "fx",
     private: true,
