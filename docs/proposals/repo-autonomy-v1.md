@@ -39,13 +39,24 @@ So T0 also **excludes** every PR that:
 
 These go to T1. The list is a floor: when in doubt, the classifier says T1.
 
+**Fail-closed rules.** The classifier returns T1, never T0, on any of:
+
+- a renamed path, judged by both its old and its new name;
+- a deleted file;
+- a binary or unrecognised file type;
+- a submodule or symlink change;
+- a diff it cannot fetch or parse;
+- its own error.
+
+It classifies the whole diff (content, not just the file list), so a T0 file can't carry a change to how checks execute.
+
 1. Required CI is green on the PR head.
 2. The PR body carries the evidence block: red on main and green on the branch for every behavioural claim, or "no behaviour change" stated and checkable; the gates run.
 3. A cold review returned IMPLEMENT/GO with no unresolved CONFIRMED finding, for any change beyond docs.
 4. The tier is decided by a deterministic classifier, not by the reviewing agent. It's a committed script, `scripts/classify-autonomy-tier.ts`, which is itself an owned path. It reads the PR's diff and prints `T0` or `T1` with the rule that fired, and it covers `CODEOWNERS` ownership plus exclusions 1–5. `motebit-reviewer` refuses to approve unless it prints `T0`.
 5. The approval body is a **receipt**: what was checked, with the run ids and the review verdict.
 
-**Enforced by GitHub, not by the agent's good behaviour.** A required status check, `autonomy-tier`, runs the same classifier in CI on every PR. The check passes in three cases:
+**Enforced by GitHub, not by the agent's good behaviour.** A required status check, `autonomy-tier`, runs the same classifier in CI on every PR **and on the `merge_group` event**, so it is judged against the exact commit the merge queue builds, not only the PR head. The check passes in three cases:
 
 - the PR classifies as T0;
 - `hakimlabs` has approved it;
@@ -65,6 +76,8 @@ It **fails** when `motebit-reviewer` has approved a PR that classifies as T1, an
 - **Daily digest:** one comment on a pinned tracking issue listing every autonomous approval and merge, with its receipt. The founder reviews receipts, not keyboards.
 - **No self-expansion:** changes to `CODEOWNERS`, `money-identity-path.ts`, this document's rules, or the ruleset are owned paths. Autonomy cannot widen itself.
 
+**Status: autonomous merging is not authorized.** It becomes authorized only when `motebit-reviewer` exists with the scoped token, the `autonomy-tier` check is required in `main-protection`, and the adversarial fixtures and the live blocked-merge check have passed.
+
 ## No interim delegation
 
 An earlier draft let Claude approve T0 PRs **as `hakimlabs`** under a standing delegation recorded in the agent's memory. That is withdrawn.
@@ -76,4 +89,9 @@ Until `motebit-reviewer` and the `autonomy-tier` check exist, every merge has th
 ## Founder actions to adopt
 
 1. Create the `motebit-reviewer` GitHub user, give it write access to `motebit/motebit`, and create its fine-grained token. Claude cannot create accounts.
-2. Approve the PR that adds `scripts/classify-autonomy-tier.ts`, the required `autonomy-tier` check (added to `main-protection`), the `AUTONOMY_T0` variable, and the digest issue. The classifier ships with its own tests: one red case per exclusion, including a test-weakening diff on a relay test.
+2. Approve the PR that adds `scripts/classify-autonomy-tier.ts`, the required `autonomy-tier` check (added to `main-protection`), the `AUTONOMY_T0` variable, and the digest issue. The classifier ships with adversarial fixtures that test both sides of the boundary:
+
+- **Must be T1:** a weakened relay money-path test (assertion removed, `.skip` added), a workflow edit, a loosened dependency range, a drift-gate config change, a rename of an owned file to an unowned path, and an unparseable diff.
+- **Must stay T0:** a docs-only change and a presentation-only UI change.
+
+Acceptance needs every fixture green, and then a live check that a T1 PR approved only by `motebit-reviewer` is blocked by the ruleset on GitHub, not just reported red.
