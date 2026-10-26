@@ -100,7 +100,7 @@ Until `motebit-reviewer` and the `autonomy-tier` check exist, every merge has th
 ## Founder actions to adopt
 
 1. Create the `motebit-reviewer` GitHub user, give it write access to `motebit/motebit`, and create its fine-grained token. Claude cannot create accounts.
-2. Approve the PR that adds `scripts/classify-autonomy-tier.ts`, the required `autonomy-tier` check (added to `main-protection`), the `AUTONOMY_T0` variable, and the digest issue. The classifier ships with adversarial fixtures that test both sides of the boundary:
+2. Approve the PR that adds `scripts/classify-autonomy-tier.ts`. When you add `autonomy-tier` as a required check in `main-protection`, **pin it to the GitHub Actions app** (integration id 15368). A required check pinned by name alone accepts a commit status of that name from any account with write access, the required `autonomy-tier` check (added to `main-protection`), the `AUTONOMY_T0` variable, and the digest issue. The classifier ships with adversarial fixtures that test both sides of the boundary:
 
 - **Must be T1:** a weakened relay money-path test (assertion removed, `.skip` added), a workflow edit, a loosened dependency range, a drift-gate config change, a rename of an owned file to an unowned path, and an unparseable diff.
 - **Must stay T0:** a docs-only change and a presentation-only UI change.
