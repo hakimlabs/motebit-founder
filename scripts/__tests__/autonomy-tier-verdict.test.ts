@@ -275,4 +275,17 @@ describe("mergeGroupPrs", () => {
   it("fails closed on an empty group", () => {
     expect(() => mergeGroupPrs([], "gh-readonly-queue/main/pr-1-abc")).toThrow(/no commits/);
   });
+
+  it("fails closed when one PR is named on more than one commit", () => {
+    // A second commit titled "(#10)" would be judged with #10's reviews.
+    expect(() =>
+      mergeGroupPrs(
+        [
+          { sha: sha("1"), subject: "docs: a (#10)" },
+          { sha: sha("2"), subject: "fix(relay): smuggled (#10)" },
+        ],
+        `gh-readonly-queue/main/pr-10-${sha("c")}`,
+      ),
+    ).toThrow(/more than one commit/);
+  });
 });

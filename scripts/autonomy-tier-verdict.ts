@@ -31,7 +31,8 @@
  * On `merge_group`, every commit in base..head is one queued PR (squash
  * titles end `(#N)`); each is classified on its own commit diff — the exact
  * change the queue builds — and judged with its own PR's reviews. A commit
- * that names no PR, or a queue ref naming a PR not in the group, fails.
+ * that names no PR, a PR named on more than one commit, or a queue ref
+ * naming a PR not in the group, fails.
  *
  * PURE core (`decidePr`, `decide`, `standingStates`); the CLI is I/O only.
  * Any API or git error fails the check (non-zero exit): an unprovable "no
@@ -175,6 +176,17 @@ export function mergeGroupPrs(
       );
     return { sha: c.sha, number: Number(m[1]) };
   });
+  // Exactly one commit per PR: a PR named twice means a commit whose diff
+  // another PR's reviews would be judged against.
+  const seen = new Set<number>();
+  for (const c of out) {
+    if (seen.has(c.number)) {
+      throw new Error(
+        `merge group names PR #${c.number} on more than one commit — expected exactly one squash commit per PR`,
+      );
+    }
+    seen.add(c.number);
+  }
   const last = /\/pr-(\d+)-[0-9a-f]+$/.exec(headRef);
   if (!last || !out.some((c) => c.number === Number(last[1]))) {
     throw new Error(

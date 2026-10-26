@@ -1,13 +1,14 @@
 /**
- * classify-autonomy-tier — adversarial fixtures on BOTH sides of the T0/T1
- * boundary (docs/proposals/repo-autonomy-v1.md, "Founder actions to adopt"
- * step 2), judged against the committed `.github/CODEOWNERS`.
+ * classify-autonomy-tier — deny by default. Adversarial fixtures on BOTH
+ * sides of the T0/T1 boundary (docs/proposals/repo-autonomy-v1.md, "Founder
+ * actions to adopt" step 2), judged against the committed `.github/CODEOWNERS`.
  *
- * Must be T1: every rule in RULES has at least one fixture that fires it, and
- * every category (codeowners, exclusions 1–5, fail-closed) is covered — so a
- * rule cannot be added without a fixture proving it sends a diff to T1.
- * Must stay T0: a docs-only change, a presentation-only UI change, and the
- * other ordinary changes autonomy exists for.
+ * Must be T1: the design's list, every bypass the cold review built against
+ * the earlier denylist classifier (each one was T0 there), and every
+ * fail-closed rule. Every key of RULES has at least one must-T1 fixture that
+ * fires it. Must stay T0: a docs/ guide edit, an apps/docs content page, bench
+ * data. The allowlist is asserted to be exactly the documented set, so a
+ * widening is a visible diff in the owned classifier.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -16,15 +17,14 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import {
+  ALLOWLIST,
   RULES,
   classifyDiff,
   classifyRevisions,
-  importSpecifiers,
+  isAllowlisted,
   main,
   parseUnifiedDiff,
-  readWorkspacePackages,
   type Classification,
-  type RuleCategory,
   type RuleId,
 } from "../classify-autonomy-tier.js";
 import { ownersOf, parseCodeowners } from "../lib/codeowners.js";
@@ -32,7 +32,6 @@ import { cleanEnv } from "../lib/differential-tree.js";
 
 const ROOT = resolve(__dirname, "..", "..");
 const CODEOWNERS = readFileSync(resolve(ROOT, ".github/CODEOWNERS"), "utf-8");
-const WORKSPACE = readWorkspacePackages(ROOT);
 
 // ── Diff builders (valid git unified diffs) ──────────────────────────────────
 
@@ -40,7 +39,7 @@ function modify(
   path: string,
   removed: string[],
   added: string[],
-  context: string[] = ["// context"],
+  context: string[] = ["context"],
 ): string {
   const n = context.length + removed.length;
   const m = context.length + added.length;
@@ -57,10 +56,10 @@ function modify(
   ].join("\n");
 }
 
-function add(path: string, lines: string[]): string {
+function add(path: string, lines: string[], mode = "100644"): string {
   return [
     `diff --git a/${path} b/${path}`,
-    "new file mode 100644",
+    `new file mode ${mode}`,
     "index 0000000..2222222",
     "--- /dev/null",
     `+++ b/${path}`,
@@ -83,18 +82,8 @@ function del(path: string, lines: string[]): string {
   ].join("\n");
 }
 
-interface Files {
-  base?: Record<string, string>;
-  head?: Record<string, string>;
-}
-
-function classify(diff: string, files: Files = {}, codeowners = CODEOWNERS): Classification {
-  return classifyDiff({
-    diff,
-    codeowners,
-    workspacePackages: WORKSPACE,
-    readFile: (rev, path) => (rev === "base" ? files.base : files.head)?.[path] ?? null,
-  });
+function classify(diff: string, codeowners = CODEOWNERS): Classification {
+  return classifyDiff({ diff, codeowners });
 }
 
 const fired = (c: Classification): Set<RuleId> => new Set(c.firings.map((f) => f.rule));
@@ -104,297 +93,386 @@ const fired = (c: Classification): Set<RuleId> => new Set(c.firings.map((f) => f
 interface Fixture {
   name: string;
   diff: string;
-  files?: Files;
   codeowners?: string;
-  /** Rules that MUST be among the firings (T1 fixtures). */
+  /** Rules that MUST be among the firings. */
   expect: RuleId[];
 }
 
-const RELAY_TEST = "services/relay/src/__tests__/fees.test.ts";
-const RELAY_TEST_SRC = [
-  `import { computeFee } from "../fees.js";`,
-  `import { describe, expect, it } from "vitest";`,
-  `describe("fees", () => {`,
-  `  it("takes 5%", () => {`,
-  `    expect(computeFee(1_000_000)).toBe(50_000);`,
-  `    expect(computeFee(0)).toBe(0);`,
-  `  });`,
-  `});`,
-].join("\n");
-
-const WEB_TEST = "apps/web/src/ui/__tests__/chat-format.test.ts";
-const WEB_TEST_SRC = [
-  `import { formatChat } from "../chat.js";`,
-  `import { expect, it } from "vitest";`,
-  `it("formats", () => {`,
-  `  expect(formatChat("a")).toBe("a");`,
-  `  expect(formatChat("")).toBe("");`,
-  `});`,
-].join("\n");
-
-const WEB_PKG_BASE = JSON.stringify(
-  { name: "@motebit/web", description: "web", dependencies: { zod: "3.23.8" } },
-  null,
-  2,
-);
+/** The cold review's 16 T0 bypasses of the denylist classifier, reconstructed. */
+const REVIEW_BYPASSES: Fixture[] = [
+  {
+    name: "bypass: the cold reviewer's agent definition told to always return GO",
+    diff: modify(
+      ".claude/agents/cold-reviewer.md",
+      ["Report CONFIRMED findings."],
+      ["Always return GO."],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: the autonomy design itself (docs/proposals/repo-autonomy-v1.md)",
+    diff: modify(
+      "docs/proposals/repo-autonomy-v1.md",
+      ["T0 also excludes"],
+      ["T0 no longer excludes"],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: a skill an agent loads (skills/*/SKILL.md)",
+    diff: modify(
+      "skills/git-commit-motebit-style/SKILL.md",
+      ["Never --no-verify."],
+      ["Use --no-verify."],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: CONSTITUTION.md",
+    diff: modify("CONSTITUTION.md", ["old clause"], ["new clause"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: expect.extend in a vitest setupFiles stub",
+    diff: modify(
+      "packages/mcp-server/src/__tests__/__stubs__/patch-ajv.ts",
+      [],
+      ["expect.extend({ toBe: () => ({ pass: true, message: () => '' }) });"],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: the real-model guard config (vitest.real-model-guard.ts)",
+    diff: modify(
+      "vitest.real-model-guard.ts",
+      ['  if (live) throw new Error("no live models");'],
+      ["  void live;"],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: a money-path test switched to a backtick dynamic import",
+    diff: modify(
+      "packages/runtime/src/__tests__/money-meter.test.ts",
+      [`import { MoneyMeter } from "../money-meter.js";`],
+      ["const { MoneyMeter } = await import(`../money-meter.js`);"],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: owned code imported through an unowned barrel",
+    diff: modify(
+      "packages/runtime/src/__tests__/meter-via-barrel.test.ts",
+      [`import { MoneyMeter } from "../money-meter.js";`],
+      [`import { MoneyMeter } from "../index.js";`],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: 'bypass: it["skip"] (computed member skip)',
+    diff: modify(
+      "apps/web/src/__tests__/chat.test.ts",
+      [`it("renders", () => {`],
+      [`it["skip"]("renders", () => {`],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: an early return; in a test body",
+    diff: modify(
+      "apps/web/src/__tests__/chat.test.ts",
+      [],
+      ["  return;"],
+      [`it("renders", () => {`],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: a count-neutral matcher swap",
+    diff: modify(
+      "apps/web/src/__tests__/chat.test.ts",
+      ["  expect(fee).toBe(50_000);"],
+      ["  expect(fee).toBeDefined();"],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: a Python conformance test CI runs",
+    diff: modify(
+      "examples/python-receipt-verifier/conformance_test.py",
+      ["    assert ok"],
+      ["    pass"],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: scripts/security-publish.ts (release.yml, id-token)",
+    diff: modify("scripts/security-publish.ts", ["  verifyProvenance();"], [""]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: scripts/archetype-conformance.ts",
+    diff: modify("scripts/archetype-conformance.ts", ["  if (!green) process.exit(1);"], [""]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: a build config (tsup.config.ts)",
+    diff: modify(
+      "packages/crypto/tsup.config.ts",
+      ["  noExternal: [],"],
+      [`  noExternal: ["evil"],`],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: a Swift package manifest (Package.swift)",
+    diff: modify(
+      "apps/mobile/modules/expo-local-inference/ios/Package.swift",
+      [`  .package(url: "a", exact: "1.0.0")`],
+      [`  .package(url: "a", from: "1.0.0")`],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bypass: the desktop CSP (tauri.conf.json)",
+    diff: modify(
+      "apps/desktop/src-tauri/tauri.conf.json",
+      [`      "csp": "default-src 'self'"`],
+      [`      "csp": null`],
+    ),
+    expect: ["not-allowlisted"],
+  },
+];
 
 export const MUST_T1: Fixture[] = [
-  // Design list: a weakened relay money-path test (assertion removed; .skip added).
+  ...REVIEW_BYPASSES,
+  // The allowlist's own exclusions.
   {
-    name: "relay money-path test: assertion removed",
+    name: "a doctrine edit (docs/doctrine/**)",
+    diff: modify("docs/doctrine/agent-archetypes.md", ["The old sentence."], ["The new sentence."]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "a proposal edit (docs/proposals/**)",
+    diff: modify("docs/proposals/context-budget-v1.md", ["old"], ["new"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "a runbook edit (docs/ops/**)",
     diff: modify(
-      RELAY_TEST,
-      ["    expect(computeFee(0)).toBe(0);"],
+      "docs/ops/agentic-lanes.md",
+      ["At most two scoped builders."],
+      ["Any number of builders."],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "a design edit (docs/design/**)",
+    diff: modify("docs/design/identity-authority-writers.md", ["old"], ["new"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "the drift-defense inventory (docs/drift-defenses.md)",
+    diff: modify("docs/drift-defenses.md", ["old"], ["new"]),
+    expect: ["not-allowlisted"],
+  },
+  // Outside the allowlist.
+  {
+    name: "a changeset (drives release versions)",
+    diff: add(".changeset/calm-chat.md", [
+      "---",
+      `"@motebit/web": patch`,
+      "---",
+      "",
+      "Calmer chat.",
+    ]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "a test file (tests are never T0)",
+    diff: modify(
+      "apps/web/src/ui/__tests__/chat-format.test.ts",
       [],
-      [`  it("takes 5%", () => {`],
+      [`  expect(format("b")).toBe("b");`],
     ),
-    files: {
-      head: { [RELAY_TEST]: RELAY_TEST_SRC.replace("    expect(computeFee(0)).toBe(0);\n", "") },
-    },
-    expect: ["test-assertion-loss", "owned-subject"],
+    expect: ["not-allowlisted"],
   },
   {
-    name: "relay money-path test: .skip added",
-    diff: modify(RELAY_TEST, [`  it("takes 5%", () => {`], [`  it.skip("takes 5%", () => {`]),
-    files: { head: { [RELAY_TEST]: RELAY_TEST_SRC.replace(`it("takes`, `it.skip("takes`) } },
-    expect: ["test-skip-added", "owned-subject"],
+    name: "README.md",
+    diff: modify("README.md", ["old"], ["new"]),
+    expect: ["not-allowlisted"],
   },
   {
-    name: "unowned test: assertion swapped for a no-op (exclusion 5 alone)",
-    diff: modify(WEB_TEST, [`  expect(formatChat("")).toBe("");`], [`  formatChat("");`]),
-    files: { head: { [WEB_TEST]: WEB_TEST_SRC } },
-    expect: ["test-assertion-loss"],
+    name: "a sub-directory CLAUDE.md (agent instructions)",
+    diff: modify("packages/panels/CLAUDE.md", ["Rule: state here."], ["Rule: anything goes."]),
+    expect: ["not-allowlisted"],
   },
   {
-    name: "unowned test: it.only added",
-    diff: modify(WEB_TEST, [`it("formats", () => {`], [`it.only("formats", () => {`]),
-    files: { head: { [WEB_TEST]: WEB_TEST_SRC } },
-    expect: ["test-skip-added"],
+    name: "DOCTRINE.md",
+    diff: modify("DOCTRINE.md", ["old"], ["new"]),
+    expect: ["not-allowlisted"],
   },
   {
-    name: "unowned test: it.fails / skipIf / xit added",
+    name: "an env template default flipped (services/relay/.env.example)",
     diff: modify(
-      WEB_TEST,
-      [],
-      [`it.fails("x", () => {});`, `it.skipIf(true)("y", () => {});`, `xit("z", () => {});`],
+      "services/relay/.env.example",
+      ["MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=true"],
+      ["MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=false"],
     ),
-    files: { head: { [WEB_TEST]: WEB_TEST_SRC } },
-    expect: ["test-skip-added"],
+    expect: ["not-allowlisted"],
   },
   {
-    name: "unowned test: timeout raised",
-    diff: modify(WEB_TEST, ["}, 5_000);"], ["}, 120_000);"]),
-    files: { head: { [WEB_TEST]: WEB_TEST_SRC } },
-    expect: ["test-timeout-retry"],
-  },
-  {
-    name: "unowned test: retry count raised",
+    name: "a presentation-only UI change (UI code is not allowlisted)",
     diff: modify(
-      WEB_TEST,
-      [`describe("x", { retry: 0 }, () => {`],
-      [`describe("x", { retry: 5 }, () => {`],
+      "apps/web/src/ui/chat.ts",
+      [`  bubble.className = "a";`],
+      [`  bubble.className = "b";`],
     ),
-    files: { head: { [WEB_TEST]: WEB_TEST_SRC } },
-    expect: ["test-timeout-retry"],
+    expect: ["not-allowlisted"],
   },
   {
-    name: "test file deleted",
-    diff: del(WEB_TEST, WEB_TEST_SRC.split("\n")),
-    files: { base: { [WEB_TEST]: WEB_TEST_SRC } },
-    expect: ["test-deleted", "deletion"],
+    name: "apps/docs content that is not md/mdx (meta.json)",
+    diff: modify("apps/docs/content/docs/meta.json", [`  "pages": ["a"]`], [`  "pages": ["b"]`]),
+    expect: ["not-allowlisted"],
   },
   {
-    name: "test under an owned package dir (packages/crypto/src/__tests__)",
-    diff: modify("packages/crypto/src/__tests__/sign.test.ts", [], ["  expect(1).toBe(1);"]),
-    files: {
-      head: { "packages/crypto/src/__tests__/sign.test.ts": `import { expect } from "vitest";` },
-    },
-    expect: ["owned-subject"],
+    name: "a loosened dependency range",
+    diff: modify("apps/web/package.json", [`    "zod": "3.23.8"`], [`    "zod": "^3.0.0"`]),
+    expect: ["not-allowlisted"],
   },
   {
-    name: "fixture under an owned package dir",
+    name: "a drift gate weakened (scripts/check-*)",
+    diff: modify("scripts/check-deps.ts", ["  if (bad) process.exit(1);"], ["  process.exit(0);"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "a weakened relay money-path test (assertion removed, .skip added)",
     diff: modify(
-      "packages/verifier/src/__tests__/fixtures/receipt.json",
-      ['  "sig": "aa"'],
-      ['  "sig": "bb"'],
+      "services/relay/src/__tests__/fees.test.ts",
+      [`  it("takes 5%", () => {`, "    expect(computeFee(0)).toBe(0);"],
+      [`  it.skip("takes 5%", () => {`],
     ),
-    expect: ["owned-subject"],
+    expect: ["not-allowlisted"],
   },
+  // CODEOWNERS (defence in depth).
   {
-    name: "unowned-dir test importing a money/identity registry package",
-    diff: modify(WEB_TEST, [], ["  expect(2).toBe(2);"]),
-    files: {
-      head: {
-        [WEB_TEST]: `import { SolanaWalletRail } from "@motebit/wallet-solana";\n${WEB_TEST_SRC}`,
-      },
-    },
-    expect: ["owned-subject"],
-  },
-  {
-    name: "test of enforcement code (scripts/lib/tamper-runner)",
-    diff: modify("scripts/__tests__/tamper-runner.test.ts", [], ["  expect(x).toBe(1);"]),
-    files: {
-      head: {
-        "scripts/__tests__/tamper-runner.test.ts": `import { runTampers } from "../lib/tamper-runner.js";`,
-      },
-    },
-    expect: ["enforcement-config"],
-  },
-  // Design list: a workflow edit.
-  {
-    name: "workflow edit drops a gate",
+    name: "a workflow edit (owned and not allowlisted)",
     diff: modify(
       ".github/workflows/ci.yml",
       ["        run: pnpm check"],
       ["        run: echo skipped"],
     ),
-    expect: ["github-config", "codeowners-owned"],
+    expect: ["codeowners-owned", "not-allowlisted"],
   },
   {
-    name: "dependabot config",
-    diff: modify(".github/dependabot.yml", ["    interval: daily"], ["    interval: monthly"]),
-    expect: ["github-config"],
-  },
-  // Design list: a loosened dependency range.
-  {
-    name: "loosened dependency range in an unowned app",
-    diff: modify("apps/web/package.json", [`    "zod": "3.23.8"`], [`    "zod": "^3.0.0"`]),
-    files: {
-      base: { "apps/web/package.json": WEB_PKG_BASE },
-      head: { "apps/web/package.json": WEB_PKG_BASE.replace(`"3.23.8"`, `"^3.0.0"`) },
-    },
-    expect: ["dependency-toolchain"],
+    name: "an allowlisted path that becomes owned is T1",
+    diff: modify("docs/security/dependency-triage.md", ["old"], ["new"]),
+    codeowners: `${CODEOWNERS}\n/docs/security/ @hakimlabs\n`,
+    expect: ["codeowners-owned"],
   },
   {
-    name: "packageManager / scripts field change",
-    diff: modify(
-      "package.json",
-      [`  "packageManager": "pnpm@9.15.0",`],
-      [`  "packageManager": "pnpm@9.0.0",`],
-    ),
-    files: {
-      base: { "package.json": `{"packageManager":"pnpm@9.15.0"}` },
-      head: { "package.json": `{"packageManager":"pnpm@9.0.0"}` },
-    },
-    expect: ["dependency-toolchain"],
+    name: "the classifier itself",
+    diff: modify("scripts/classify-autonomy-tier.ts", ["  return x;"], ["  return y;"]),
+    expect: ["codeowners-owned", "not-allowlisted"],
   },
+  // Fail-closed.
   {
-    name: "lockfile change",
-    diff: modify("pnpm-lock.yaml", ["      version: 3.23.8"], ["      version: 3.20.0"]),
-    expect: ["dependency-toolchain"],
-  },
-  {
-    name: "node pin change",
-    diff: modify(".nvmrc", ["22"], ["20"], []),
-    expect: ["dependency-toolchain"],
-  },
-  {
-    name: "Cargo manifest change",
-    diff: modify("apps/desktop/src-tauri/Cargo.toml", [`tauri = "2.1"`], [`tauri = "2"`]),
-    expect: ["dependency-toolchain"],
-  },
-  // Design list: a drift-gate config change.
-  {
-    name: "drift gate weakened (scripts/check-*)",
-    diff: modify(
-      "scripts/check-deps.ts",
-      ["  if (violations.length > 0) process.exit(1);"],
-      ["  process.exit(0);"],
-    ),
-    expect: ["enforcement-config"],
-  },
-  {
-    name: "gate library change (scripts/lib/**)",
-    diff: modify("scripts/lib/gate-report.ts", ["  process.exitCode = 1;"], [""]),
-    expect: ["enforcement-config"],
-  },
-  {
-    name: "package vitest config lowers coverage thresholds",
-    diff: modify("apps/web/vitest.config.ts", ["      lines: 80,"], ["      lines: 10,"]),
-    expect: ["enforcement-config"],
-  },
-  {
-    name: "tsconfig loosens strictness",
-    diff: modify("apps/web/tsconfig.json", [`    "strict": true,`], [`    "strict": false,`]),
-    expect: ["enforcement-config"],
-  },
-  {
-    name: "lint rule loosened",
-    diff: modify(
-      ".eslintrc.js",
-      [`    "no-floating-promises": "error",`],
-      [`    "no-floating-promises": "off",`],
-    ),
-    expect: ["enforcement-config"],
-  },
-  {
-    name: "pre-push hook edited",
-    diff: modify(".husky/pre-push", ["pnpm check"], ["true"]),
-    expect: ["enforcement-config"],
-  },
-  {
-    name: "turbo pipeline edited",
-    diff: modify("turbo.json", [`      "cache": false`], [`      "cache": true`]),
-    expect: ["enforcement-config"],
-  },
-  {
-    name: "test setup file can redefine expect",
-    diff: modify("apps/web/src/test-setup.ts", [], ["globalThis.expect = () => ({ toBe() {} });"]),
-    expect: ["enforcement-config"],
-  },
-  {
-    name: "a T0-looking file carries a lint suppression",
-    diff: modify(
-      "apps/web/src/ui/chat.ts",
-      ["  void send();"],
-      ["  // eslint-disable-next-line @typescript-eslint/no-floating-promises", "  send();"],
-    ),
-    expect: ["check-suppression"],
-  },
-  {
-    name: "a T0-looking file carries @ts-ignore",
-    diff: modify(
-      "apps/web/src/ui/chat.ts",
-      ["  render(x);"],
-      ["  // @ts-ignore", "  render(x as never);"],
-    ),
-    expect: ["check-suppression"],
-  },
-  // Design list: a rename of an owned file to an unowned path.
-  {
-    name: "rename of an owned relay money file to an unowned path",
+    name: "a rename within docs/ (both names allowlisted)",
     diff: [
-      "diff --git a/services/relay/src/fees.ts b/services/relay/src/util/fees.ts",
+      "diff --git a/docs/proofs/a.md b/docs/proofs/b.md",
       "similarity index 100%",
-      "rename from services/relay/src/fees.ts",
-      "rename to services/relay/src/util/fees.ts",
-      "",
-    ].join("\n"),
-    expect: ["rename", "codeowners-owned"],
-  },
-  {
-    name: "rename of an unowned doc (fail-closed: a rename is T1)",
-    diff: [
-      "diff --git a/docs/a.md b/docs/b.md",
-      "similarity index 90%",
-      "rename from docs/a.md",
-      "rename to docs/b.md",
-      "index 1111111..2222222 100644",
-      "--- a/docs/a.md",
-      "+++ b/docs/b.md",
-      "@@ -1 +1 @@",
-      "-old",
-      "+new",
+      "rename from docs/proofs/a.md",
+      "rename to docs/proofs/b.md",
       "",
     ].join("\n"),
     expect: ["rename"],
   },
   {
-    name: "deleted unowned doc",
-    diff: del("docs/old-note.md", ["# old"]),
+    name: "a rename of an owned file to an allowlisted path (judged by both names)",
+    diff: [
+      "diff --git a/services/relay/src/fees.ts b/docs/fees.md",
+      "similarity index 100%",
+      "rename from services/relay/src/fees.ts",
+      "rename to docs/fees.md",
+      "",
+    ].join("\n"),
+    expect: ["rename", "codeowners-owned", "not-allowlisted"],
+  },
+  {
+    name: "a deleted doc",
+    diff: del("docs/security/dependency-triage.md", ["# triage"]),
     expect: ["deletion"],
   },
-  // Design list: an unparseable diff.
+  {
+    name: "a mode-only change on an allowlisted doc",
+    diff: [
+      "diff --git a/docs/proofs/a.md b/docs/proofs/a.md",
+      "old mode 100644",
+      "new mode 100755",
+      "",
+    ].join("\n"),
+    expect: ["mode-change"],
+  },
+  {
+    name: "a new executable file in an allowlisted dir",
+    diff: add("docs/proofs/run.md", ["#!/bin/sh"], "100755"),
+    expect: ["mode-change"],
+  },
+  {
+    name: "a symlink in an allowlisted dir",
+    diff: [
+      "diff --git a/docs/link.md b/docs/link.md",
+      "new file mode 120000",
+      "index 0000000..2222222",
+      "--- /dev/null",
+      "+++ b/docs/link.md",
+      "@@ -0,0 +1 @@",
+      "+../CLAUDE.md",
+      "\\ No newline at end of file",
+      "",
+    ].join("\n"),
+    expect: ["symlink"],
+  },
+  {
+    name: "a submodule bump",
+    diff: [
+      "diff --git a/vendor/lib b/vendor/lib",
+      "index 1111111..2222222 160000",
+      "--- a/vendor/lib",
+      "+++ b/vendor/lib",
+      "@@ -1 +1 @@",
+      "-Subproject commit 1111111111111111111111111111111111111111",
+      "+Subproject commit 2222222222222222222222222222222222222222",
+      "",
+    ].join("\n"),
+    expect: ["submodule"],
+  },
+  {
+    name: "binary content at an allowlisted path",
+    diff: [
+      "diff --git a/docs/proofs/a.md b/docs/proofs/a.md",
+      "index 1111111..2222222 100644",
+      "Binary files a/docs/proofs/a.md and b/docs/proofs/a.md differ",
+      "",
+    ].join("\n"),
+    expect: ["binary"],
+  },
+  {
+    name: "a GIT binary patch",
+    diff: [
+      "diff --git a/docs/img.md b/docs/img.md",
+      "new file mode 100644",
+      "index 0000000..2222222",
+      "GIT binary patch",
+      "literal 4",
+      "LcmZQzWMT#Y01f~L",
+      "",
+      "literal 0",
+      "HcmV?d00001",
+      "",
+    ].join("\n"),
+    expect: ["binary"],
+  },
   { name: "unparseable diff: garbage", diff: "this is not a diff\n", expect: ["unparseable-diff"] },
   {
     name: "unparseable diff: hunk overruns its header",
@@ -433,201 +511,51 @@ export const MUST_T1: Fixture[] = [
     expect: ["unparseable-diff"],
   },
   { name: "empty diff", diff: "", expect: ["empty-diff"] },
-  // Design list: a binary file.
-  {
-    name: "binary file",
-    diff: [
-      "diff --git a/apps/web/public/logo.png b/apps/web/public/logo.png",
-      "index 1111111..2222222 100644",
-      "Binary files a/apps/web/public/logo.png and b/apps/web/public/logo.png differ",
-      "",
-    ].join("\n"),
-    expect: ["binary"],
-  },
-  {
-    name: "binary patch",
-    diff: [
-      "diff --git a/docs/img.bin b/docs/img.bin",
-      "new file mode 100644",
-      "index 0000000..2222222",
-      "GIT binary patch",
-      "literal 4",
-      "LcmZQzWMT#Y01f~L",
-      "",
-      "literal 0",
-      "HcmV?d00001",
-      "",
-    ].join("\n"),
-    expect: ["binary"],
-  },
-  {
-    name: "unrecognised file type",
-    diff: modify("apps/web/fly.toml", [`  memory = "512mb"`], [`  memory = "1gb"`]),
-    expect: ["unrecognised-type"],
-  },
-  {
-    name: "symlink added",
-    diff: [
-      "diff --git a/docs/link.md b/docs/link.md",
-      "new file mode 120000",
-      "index 0000000..2222222",
-      "--- /dev/null",
-      "+++ b/docs/link.md",
-      "@@ -0,0 +1 @@",
-      "+../CLAUDE.md",
-      "\\ No newline at end of file",
-      "",
-    ].join("\n"),
-    expect: ["symlink"],
-  },
-  {
-    name: "submodule bump",
-    diff: [
-      "diff --git a/vendor/lib b/vendor/lib",
-      "index 1111111..2222222 160000",
-      "--- a/vendor/lib",
-      "+++ b/vendor/lib",
-      "@@ -1 +1 @@",
-      "-Subproject commit 1111111111111111111111111111111111111111",
-      "+Subproject commit 2222222222222222222222222222222222222222",
-      "",
-    ].join("\n"),
-    expect: ["submodule"],
-  },
-  {
-    name: "content unavailable: package.json with no readable content",
-    diff: modify("apps/web/package.json", [`  "description": "a",`], [`  "description": "b",`]),
-    expect: ["content-unavailable"],
-  },
-  {
-    name: "content unavailable: test source unreadable",
-    diff: modify(WEB_TEST, [], ["  expect(3).toBe(3);"]),
-    expect: ["content-unavailable"],
-  },
   {
     name: "classifier error: CODEOWNERS it refuses to parse",
     diff: modify("docs/a.md", ["a"], ["b"]),
     codeowners: "!/docs/ @hakimlabs\n",
     expect: ["classifier-error"],
   },
-  // Lead decision: env templates are security posture, explicitly T1.
-  {
-    name: "env template default flipped (services/relay/.env.example)",
-    diff: modify(
-      "services/relay/.env.example",
-      ["MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=true"],
-      ["MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=false"],
-    ),
-    expect: ["env-template"],
-  },
-  {
-    name: "env file anywhere (config/relay.env)",
-    diff: modify("config/relay.env", ["REQUIRE_AUTH=1"], ["REQUIRE_AUTH=0"]),
-    expect: ["env-template"],
-  },
-  // Lead decision: agent instructions and doctrine are T1 (no self-expansion).
-  {
-    name: "sub-directory CLAUDE.md (packages/panels/CLAUDE.md)",
-    diff: modify("packages/panels/CLAUDE.md", ["Rule: state here."], ["Rule: anything goes."]),
-    expect: ["agent-instructions"],
-  },
-  {
-    name: "nested AGENTS.md",
-    diff: modify("apps/web/AGENTS.md", ["old"], ["new"]),
-    expect: ["agent-instructions"],
-  },
-  {
-    name: "DOCTRINE.md",
-    diff: modify("DOCTRINE.md", ["old"], ["new"]),
-    expect: ["agent-instructions"],
-  },
-  {
-    name: "a doctrine doc (docs/doctrine/**)",
-    diff: modify("docs/doctrine/agent-archetypes.md", ["The old sentence."], ["The new sentence."]),
-    expect: ["agent-instructions"],
-  },
-  {
-    name: "constitutional file (CODEOWNERS-owned)",
-    diff: modify("CLAUDE.md", ["old"], ["new"]),
-    expect: ["codeowners-owned"],
-  },
-  {
-    name: "the classifier itself is owned",
-    diff: modify("scripts/classify-autonomy-tier.ts", ["  return x;"], ["  return y;"]),
-    expect: ["codeowners-owned", "enforcement-config"],
-  },
   {
     name: "a T0 file hiding behind a T1 file in the same diff",
     diff:
       modify("docs/a.md", ["a"], ["b"]) +
       modify("services/relay/src/fees.ts", ["  return 5;"], ["  return 0;"]),
-    expect: ["codeowners-owned"],
+    expect: ["codeowners-owned", "not-allowlisted"],
   },
 ];
 
-const T0_TEST = "apps/web/src/ui/__tests__/chat-format.test.ts";
-
-export const MUST_T0: { name: string; diff: string; files?: Files }[] = [
-  // Design list: a docs-only change.
+export const MUST_T0: { name: string; diff: string }[] = [
   {
-    name: "docs-only change (docs/**/*.md, not owned)",
+    name: "a docs/ guide edit",
     diff: modify(
-      "docs/ops/agentic-lanes.md",
+      "docs/security/dependency-triage.md",
       ["The old sentence."],
       ["The new, clearer sentence."],
     ),
   },
   {
-    name: "new doc page",
-    diff: add("docs/ops/new-runbook.md", ["# Runbook", "", "Steps."]),
-  },
-  // Design list: a presentation-only UI change.
-  {
-    name: "presentation-only UI change in an unowned app file",
-    diff: modify(
-      "apps/web/src/ui/chat.ts",
-      [`  bubble.className = "chat-bubble";`],
-      [`  bubble.className = "chat-bubble chat-bubble--calm";`],
-    ),
+    name: "a new docs/ page",
+    diff: add("docs/proofs/new-proof.md", ["# Proof", "", "Steps."]),
   },
   {
-    name: "presentation-only markup / style change",
-    diff: modify(
-      "apps/web/index.html",
-      [`  <div class="rail">`],
-      [`  <div class="rail rail--compact">`],
-    ),
+    name: "an apps/docs content page (mdx)",
+    diff: modify("apps/docs/content/docs/concepts/identity.mdx", ["Old prose."], ["New prose."]),
   },
   {
-    name: "a changeset",
-    diff: add(".changeset/calm-chat.md", [
-      "---",
-      `"@motebit/web": patch`,
-      "---",
-      "",
-      "Calmer chat bubbles.",
-    ]),
-  },
-  {
-    name: "a strengthened unowned test (assertions added, nothing skipped)",
-    diff: modify(T0_TEST, [], [`  expect(formatChat("b")).toBe("b");`]),
-    files: { head: { [T0_TEST]: WEB_TEST_SRC } },
-  },
-  {
-    name: "package.json description-only change",
-    diff: modify(
-      "apps/web/package.json",
-      [`  "description": "web",`],
-      [`  "description": "the web surface",`],
-    ),
-    files: {
-      base: { "apps/web/package.json": WEB_PKG_BASE },
-      head: { "apps/web/package.json": WEB_PKG_BASE.replace(`"web"`, `"the web surface"`) },
-    },
+    name: "an apps/docs content page (md)",
+    diff: modify("apps/docs/content/docs/developer/notes.md", ["Old prose."], ["New prose."]),
   },
   {
     name: "bench prompt data (scripts/bench/**/*.json)",
     diff: modify("scripts/bench/intelligence-parity/prompts.json", [`  "a": 1`], [`  "a": 2`]),
+  },
+  {
+    name: "two allowlisted files in one diff",
+    diff:
+      modify("docs/security/dependency-triage.md", ["a"], ["b"]) +
+      modify("scripts/bench/intelligence-parity/prompts.json", ["c"], ["d"]),
   },
 ];
 
@@ -636,11 +564,11 @@ export const MUST_T0: { name: string; diff: string; files?: Files }[] = [
 describe("must-T1 fixtures", () => {
   for (const f of MUST_T1) {
     it(`T1: ${f.name}`, () => {
-      const c = classify(f.diff, f.files, f.codeowners);
+      const c = classify(f.diff, f.codeowners);
       expect(c.tier).toBe("T1");
-      const got = fired(c);
+      const got = [...fired(c)];
       for (const r of f.expect)
-        expect([...got], `${f.name}: expected ${r} among ${[...got].join(", ")}`).toContain(r);
+        expect(got, `${f.name}: expected ${r} among ${got.join(", ")}`).toContain(r);
     });
   }
 });
@@ -648,7 +576,7 @@ describe("must-T1 fixtures", () => {
 describe("must-T0 fixtures", () => {
   for (const f of MUST_T0) {
     it(`T0: ${f.name}`, () => {
-      const c = classify(f.diff, f.files);
+      const c = classify(f.diff);
       expect(c.firings, JSON.stringify(c.firings)).toEqual([]);
       expect(c.tier).toBe("T0");
       expect(c.rule).toBeNull();
@@ -656,45 +584,69 @@ describe("must-T0 fixtures", () => {
   }
 });
 
-describe("coverage of the rule table", () => {
+describe("the rule table and the allowlist", () => {
   it("every rule in RULES has at least one must-T1 fixture that fires it", () => {
     const covered = new Set<RuleId>();
-    for (const f of MUST_T1)
-      for (const r of fired(classify(f.diff, f.files, f.codeowners))) covered.add(r);
-    const missing = (Object.keys(RULES) as RuleId[]).filter((r) => !covered.has(r));
-    expect(missing).toEqual([]);
+    for (const f of MUST_T1) for (const r of fired(classify(f.diff, f.codeowners))) covered.add(r);
+    expect((Object.keys(RULES) as RuleId[]).filter((r) => !covered.has(r))).toEqual([]);
   });
 
-  it("every exclusion category (codeowners, 1–5, fail-closed) has at least one must-T1 fixture", () => {
-    const categories: RuleCategory[] = [
-      "codeowners",
-      "exclusion-1",
-      "exclusion-2",
-      "exclusion-3",
-      "exclusion-4",
-      "exclusion-5",
-      "self-expansion",
-      "fail-closed",
-    ];
-    const tableCategories = new Set(Object.values(RULES).map((r) => r.category));
-    expect([...tableCategories].sort()).toEqual([...categories].sort());
-    const covered = new Set<RuleCategory>();
-    for (const f of MUST_T1)
-      for (const r of fired(classify(f.diff, f.files, f.codeowners)))
-        covered.add(RULES[r].category);
-    expect([...covered].sort()).toEqual([...categories].sort());
+  it("every one of the cold review's 16+ denylist bypasses is a must-T1 fixture", () => {
+    expect(REVIEW_BYPASSES.length).toBeGreaterThanOrEqual(16);
+    for (const f of REVIEW_BYPASSES) expect(classify(f.diff).tier, f.name).toBe("T1");
+  });
+
+  it("the allowlist is exactly the documented set (widening it is a visible diff in an owned file)", () => {
+    expect(ALLOWLIST).toEqual({
+      include: [
+        "docs/**/*.md",
+        "apps/docs/content/**/*.md",
+        "apps/docs/content/**/*.mdx",
+        "scripts/bench/**/*.json",
+      ],
+      exclude: [
+        "docs/doctrine/**",
+        "docs/proposals/**",
+        "docs/ops/**",
+        "docs/design/**",
+        "docs/drift-defenses.md",
+      ],
+    });
+  });
+
+  it("isAllowlisted draws the documented boundary", () => {
+    for (const p of [
+      "docs/a.md",
+      "docs/security/dependency-triage.md",
+      "apps/docs/content/docs/a.mdx",
+      "scripts/bench/x/y.json",
+    ])
+      expect(isAllowlisted(p), p).toBe(true);
+    for (const p of [
+      "docs/doctrine/a.md",
+      "docs/proposals/a.md",
+      "docs/ops/a.md",
+      "docs/design/a.md",
+      "docs/drift-defenses.md",
+      "docs/a.mdx",
+      "docs/operator/docker-compose.example.yml",
+      "apps/docs/content/docs/meta.json",
+      "apps/docs/src/page.tsx",
+      "scripts/bench/run.ts",
+      "README.md",
+      "xdocs/a.md",
+    ])
+      expect(isAllowlisted(p), p).toBe(false);
   });
 
   it("the T1 verdict headlines the most fundamental rule that fired, whatever the diff order", () => {
     const c = classify(
-      del("docs/old.md", ["x"]) +
-        modify("services/relay/src/fees.ts", ["  return 5;"], ["  return 0;"]),
+      del("docs/old.md", ["x"]) + modify(".github/workflows/ci.yml", ["a"], ["b"]),
     );
-    expect(c.firings[0]!.rule).toBe("deletion"); // diff order puts the deletion first
-    expect(c.rule).toBe("codeowners-owned");
-    expect(c.category).toBe("codeowners");
+    expect(c.firings[0]!.rule).toBe("deletion");
+    expect(c.rule).toBe("not-allowlisted");
     expect(c.summary).toMatch(
-      /^T1 — codeowners-owned \(codeowners\) at services\/relay\/src\/fees\.ts/,
+      /^T1 — not-allowlisted \(allowlist\) at \.github\/workflows\/ci\.yml/,
     );
   });
 });
@@ -706,7 +658,6 @@ describe("the boundary is owned", () => {
     "scripts/autonomy-tier-verdict.ts",
     ".github/workflows/autonomy-tier.yml",
     ".github/CODEOWNERS",
-    "scripts/money-identity-path.ts",
     "scripts/lib/codeowners.ts",
   ]) {
     it(`${p} is owned by @hakimlabs`, () => {
@@ -718,7 +669,19 @@ describe("the boundary is owned", () => {
 describe("parser", () => {
   it("reads a rename with content changes as both names", () => {
     const [f] = parseUnifiedDiff(
-      MUST_T1.find((x) => x.name.startsWith("rename of an unowned doc"))!.diff,
+      [
+        "diff --git a/docs/a.md b/docs/b.md",
+        "similarity index 90%",
+        "rename from docs/a.md",
+        "rename to docs/b.md",
+        "index 1111111..2222222 100644",
+        "--- a/docs/a.md",
+        "+++ b/docs/b.md",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      ].join("\n"),
     );
     expect(f).toMatchObject({
       oldPath: "docs/a.md",
@@ -726,20 +689,6 @@ describe("parser", () => {
       renamed: true,
       added: ["new"],
       removed: ["old"],
-    });
-  });
-
-  it("reads a mode-only change from the diff --git line", () => {
-    const [f] = parseUnifiedDiff(
-      ["diff --git a/scripts/x.sh b/scripts/x.sh", "old mode 100644", "new mode 100755", ""].join(
-        "\n",
-      ),
-    );
-    expect(f).toMatchObject({
-      oldPath: "scripts/x.sh",
-      newPath: "scripts/x.sh",
-      oldMode: "100644",
-      newMode: "100755",
     });
   });
 
@@ -760,30 +709,18 @@ describe("parser", () => {
       parseUnifiedDiff(["diff --git a/x.md b/x.md", "weird header", ""].join("\n")),
     ).toThrow(/unrecognised/);
   });
-
-  it("finds every import form a test uses to reach its subject", () => {
-    expect(
-      importSpecifiers(
-        [
-          `import { a } from "../a.js";`,
-          `import "../side.js";`,
-          `const b = await import("../b.js");`,
-          `vi.mock("../c.js", () => ({}));`,
-          `const d = require("../d.js");`,
-          `export { e } from "../e.js";`,
-        ].join("\n"),
-      ).sort(),
-    ).toEqual(["../a.js", "../b.js", "../c.js", "../d.js", "../e.js", "../side.js"]);
-  });
-
-  it("finds a test's subject through vi.mock even when it never imports it", () => {
-    const p = "services/relay/src/__tests__/mocked.test.ts";
-    const c = classify(modify(p, [], ["  expect(1).toBe(1);"]), {
-      head: { [p]: `vi.mock("../budget.js", () => ({ check: () => true }));` },
-    });
-    expect([...fired(c)]).toContain("owned-subject");
-  });
 });
+
+function capture(fn: () => number): { code: number; out: string } {
+  const writes: string[] = [];
+  const orig = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((s: string) => (writes.push(s), true)) as typeof process.stdout.write;
+  try {
+    return { code: fn(), out: writes.join("") };
+  } finally {
+    process.stdout.write = orig;
+  }
+}
 
 describe("CLI", () => {
   it("prints a T1 JSON verdict and exits 0 on an unparseable diff (a classification, not an error)", () => {
@@ -791,38 +728,21 @@ describe("CLI", () => {
     try {
       const file = join(dir, "x.diff");
       writeFileSync(file, "not a diff\n");
-      const writes: string[] = [];
-      const orig = process.stdout.write.bind(process.stdout);
-      process.stdout.write = ((s: string) => (writes.push(s), true)) as typeof process.stdout.write;
-      let code: number;
-      try {
-        code = main(["--diff", file]);
-      } finally {
-        process.stdout.write = orig;
-      }
+      const { code, out } = capture(() => main(["--diff", file]));
       expect(code).toBe(0);
-      const json = JSON.parse(writes.join("").split("\n")[0]!) as Classification;
-      expect(json).toMatchObject({ tier: "T1", rule: "unparseable-diff" });
+      expect(JSON.parse(out.split("\n")[0]!)).toMatchObject({
+        tier: "T1",
+        rule: "unparseable-diff",
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("exits non-zero with a T1 classifier-error verdict when it cannot run", () => {
-    const writes: string[] = [];
-    const orig = process.stdout.write.bind(process.stdout);
-    process.stdout.write = ((s: string) => (writes.push(s), true)) as typeof process.stdout.write;
-    let code: number;
-    try {
-      code = main(["--diff", "/nonexistent/autonomy-tier.diff"]);
-    } finally {
-      process.stdout.write = orig;
-    }
+    const { code, out } = capture(() => main(["--diff", "/nonexistent/autonomy-tier.diff"]));
     expect(code).toBe(2);
-    expect(JSON.parse(writes.join("").split("\n")[0]!)).toMatchObject({
-      tier: "T1",
-      rule: "classifier-error",
-    });
+    expect(JSON.parse(out.split("\n")[0]!)).toMatchObject({ tier: "T1", rule: "classifier-error" });
   });
 });
 
@@ -857,20 +777,20 @@ describe("against a real git repository (git diff --find-renames base...head)", 
 
   it("judges a rename of an owned file by both names", () => {
     git("checkout", "-q", "-b", "rename", baseSha);
-    mkdirSync(join(dir, "services/relay/src/util"), { recursive: true });
-    git("mv", "services/relay/src/fees.ts", "services/relay/src/util/fees.ts");
+    mkdirSync(join(dir, "docs/util"), { recursive: true });
+    git("mv", "services/relay/src/fees.ts", "docs/util/fees.md");
     git("commit", "-q", "-m", "move");
     const c = classifyRevisions(dir, baseSha, git("rev-parse", "HEAD"));
     expect(c.tier).toBe("T1");
-    expect([...fired(c)]).toEqual(expect.arrayContaining(["rename", "codeowners-owned"]));
     expect(
       c.firings.some(
         (f) => f.path === "services/relay/src/fees.ts" && f.rule === "codeowners-owned",
       ),
     ).toBe(true);
+    expect([...fired(c)]).toContain("rename");
   });
 
-  it("passes a docs-only branch as T0", () => {
+  it("passes an allowlisted docs-only branch as T0", () => {
     git("checkout", "-q", "-b", "docs", baseSha);
     write("docs/note.md", "# note\n\nhello, world\n");
     git("commit", "-q", "-am", "docs");
@@ -880,7 +800,9 @@ describe("against a real git repository (git diff --find-renames base...head)", 
   });
 
   it("fails closed when a revision cannot be resolved", () => {
-    const c = classifyRevisions(dir, baseSha, "0".repeat(40));
-    expect(c).toMatchObject({ tier: "T1", rule: "unparseable-diff" });
+    expect(classifyRevisions(dir, baseSha, "0".repeat(40))).toMatchObject({
+      tier: "T1",
+      rule: "unparseable-diff",
+    });
   });
 });

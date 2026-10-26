@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Tamper check for classify-autonomy-tier.test.ts and autonomy-tier-verdict.test.ts.
 //
-// Each entry reverts (part of) one rule of the autonomy boundary and names the
-// test expected to go red. The shared runner (scripts/lib/tamper-runner.ts)
+// Each entry reverts (part of) one rule of the autonomy boundary — an
+// allowlist exclusion, a widening of the allowlist, a fail-closed rule, the
+// CODEOWNERS defence in depth, or a verdict rule — and names the test
+// expected to go red. The shared runner (scripts/lib/tamper-runner.ts)
 // applies each tamper in an isolated copy of the tree.
 //
 //   node scripts/__tests__/autonomy-tier.tampers.mjs
@@ -18,113 +20,90 @@ const CLASSIFIER_TEST = "scripts/__tests__/classify-autonomy-tier.test.ts";
 const VERDICT_TEST = "scripts/__tests__/autonomy-tier-verdict.test.ts";
 
 const T1 = (name) => `must-T1 fixtures T1: ${name}`;
+const OFF = (text) => text.replace(/^(\s*(?:else )?)if \(/, "$1if ((false as boolean) && ");
+const off = (text, red, test) => ({
+  file: test === VERDICT_TEST ? VERDICT : CLASSIFIER,
+  text,
+  replacement: OFF(text),
+  red,
+  test,
+});
+const dropLine = (line) => ({ file: CLASSIFIER, text: `${line}\n`, replacement: "" });
 
 const TAMPERS = [
+  // One per allowlist exclusion.
   {
-    // The owned-ancestor rule and the subject-by-name rule overlap for every
-    // carve-out CODEOWNERS has today (`__tests__/`, `*.test.ts`), so either
-    // one alone still catches the fixture; both are removed together.
-    name: "exclusion 1: a test under an owned directory is not caught",
+    name: "allowlist: docs/doctrine/** is not excluded",
+    ...dropLine('    "docs/doctrine/**",'),
+    red: T1("a doctrine edit (docs/doctrine/**)"),
+  },
+  {
+    name: "allowlist: docs/proposals/** is not excluded",
+    ...dropLine('    "docs/proposals/**",'),
+    red: T1("a proposal edit (docs/proposals/**)"),
+  },
+  {
+    name: "allowlist: docs/ops/** is not excluded",
+    ...dropLine('    "docs/ops/**",'),
+    red: T1("a runbook edit (docs/ops/**)"),
+  },
+  {
+    name: "allowlist: docs/design/** is not excluded",
+    ...dropLine('    "docs/design/**",'),
+    red: T1("a design edit (docs/design/**)"),
+  },
+  {
+    name: "allowlist: docs/drift-defenses.md is not excluded",
+    ...dropLine('    "docs/drift-defenses.md",'),
+    red: T1("the drift-defense inventory (docs/drift-defenses.md)"),
+  },
+  // Widening.
+  {
+    name: "allowlist widened to **/*.md (agent instructions become T0)",
+    file: CLASSIFIER,
+    text: '    "docs/**/*.md",\n',
+    replacement: '    "**/*.md",\n',
+    red: T1("a sub-directory CLAUDE.md (agent instructions)"),
+  },
+  {
+    name: "allowlist widened to **/*.md (the autonomy design's sibling doctrine root)",
+    file: CLASSIFIER,
+    text: '    "docs/**/*.md",\n',
+    replacement: '    "**/*.md",\n',
+    red: T1("DOCTRINE.md"),
+  },
+  // Fail-closed.
+  off('      if (f.renamed) fire("rename"', T1("a rename within docs/ (both names allowlisted)")),
+  off('      if (f.newPath === null) fire("deletion"', T1("a deleted doc")),
+  off('      if (f.binary) fire("binary"', T1("binary content at an allowlisted path")),
+  {
+    name: "fail-closed: a mode change is accepted",
     edits: [
       {
         file: CLASSIFIER,
-        from: "        if (anc !== null) fire(",
-        to: "        if ((false as boolean) && anc !== null) fire(",
+        from: '        else fire("mode-change", label, `file mode ${mode}`);',
+        to: "        else void mode;",
       },
       {
         file: CLASSIFIER,
-        from: "          if (subj !== p) {",
-        to: "          if ((false as boolean) && subj !== p) {",
+        from: "      if (f.oldMode !== null && f.newMode !== null && f.oldMode !== f.newMode) {",
+        to: "      if ((false as boolean) && f.oldMode !== null && f.newMode !== null && f.oldMode !== f.newMode) {",
       },
     ],
-    red: T1("fixture under an owned package dir"),
+    red: T1("a mode-only change on an allowlisted doc"),
   },
-  {
-    name: "exclusion 1: a test's relative imports are not resolved",
-    file: CLASSIFIER,
-    text: '              if (spec.startsWith(".")) {',
-    replacement: '              if ((false as boolean) && spec.startsWith(".")) {',
-    red: "parser finds a test's subject through vi.mock even when it never imports it",
-  },
-  {
-    name: "exclusion 2: .github/ is not an exclusion",
-    file: CLASSIFIER,
-    text: '        if (p.startsWith(".github/")) fire(',
-    replacement: '        if ((false as boolean) && p.startsWith(".github/")) fire(',
-    red: T1("dependabot config"),
-  },
-  {
-    name: "exclusion 3: package.json dependency fields are not compared",
-    file: CLASSIFIER,
-    text: "            if (changed.length > 0)\n",
-    replacement: "            if ((false as boolean) && changed.length > 0)\n",
-    red: T1("loosened dependency range in an unowned app"),
-  },
-  {
-    // The fixture's `.example` extension is unrecognised, so the fail-close
-    // would still catch it; the tamper also recognises the extension, which is
-    // exactly the later change the explicit rule exists to survive.
-    name: "exclusion 3: an env template is T1 only by the unrecognised-extension close",
-    edits: [
-      {
-        file: CLASSIFIER,
-        from: '        if (isEnvTemplatePath(p)) fire("env-template"',
-        to: '        if ((false as boolean) && isEnvTemplatePath(p)) fire("env-template"',
-      },
-      { file: CLASSIFIER, from: '  "kt",\n]);', to: '  "kt",\n  "example",\n]);' },
-    ],
-    red: T1("env template default flipped (services/relay/.env.example)"),
-  },
-  {
-    name: "self-expansion: a sub-directory CLAUDE.md is T0",
-    file: CLASSIFIER,
-    text: "        if (isAgentInstructionsPath(p))\n",
-    replacement: "        if ((false as boolean) && isAgentInstructionsPath(p))\n",
-    red: T1("sub-directory CLAUDE.md (packages/panels/CLAUDE.md)"),
-  },
-  {
-    name: "exclusion 4: an added suppression directive is not caught",
-    file: CLASSIFIER,
-    text: "        if (sup.length > 0)\n",
-    replacement: "        if ((false as boolean) && sup.length > 0)\n",
-    red: T1("a T0-looking file carries @ts-ignore"),
-  },
-  {
-    name: "exclusion 5: a net assertion loss is not caught",
-    file: CLASSIFIER,
-    text: "        if (lostAsserts > 0)\n",
-    replacement: "        if ((false as boolean) && lostAsserts > 0)\n",
-    red: T1("unowned test: assertion swapped for a no-op (exclusion 5 alone)"),
-  },
-  {
-    name: "exclusion 5: a new .only is not caught",
-    file: CLASSIFIER,
-    text: "        if (skips.length > 0)\n",
-    replacement: "        if ((false as boolean) && skips.length > 0)\n",
-    red: T1("unowned test: it.only added"),
-  },
-  {
-    name: "fail-closed: a rename is judged by its names only",
-    file: CLASSIFIER,
-    text: '      if (f.renamed) fire("rename"',
-    replacement: '      if ((false as boolean) && f.renamed) fire("rename"',
-    red: T1("rename of an unowned doc (fail-closed: a rename is T1)"),
-  },
-  {
-    name: "fail-closed: binary content is accepted",
-    file: CLASSIFIER,
-    text: '      if (f.binary) fire("binary"',
-    replacement: '      if ((false as boolean) && f.binary) fire("binary"',
-    red: T1("binary file"),
-  },
-  {
-    name: "verdict: a machine approval of a T1 PR passes",
-    file: VERDICT,
-    text: '  if (pr.tier !== "T0") {',
-    replacement: '  if ((false as boolean) && pr.tier !== "T0") {',
-    red: "the named design cases FAILS when motebit-reviewer approved a T1 PR",
-    test: VERDICT_TEST,
-  },
+  off('    if (input.diff.trim() === "") {', T1("empty diff")),
+  // Defence in depth.
+  off(
+    "        if (r && r.owners.length > 0) {",
+    T1("an allowlisted path that becomes owned is T1"),
+  ),
+  // Verdict.
+  off(
+    '  if (pr.tier !== "T0") {',
+    "the named design cases FAILS when motebit-reviewer approved a T1 PR",
+    VERDICT_TEST,
+  ),
   {
     name: "verdict: an unset kill-switch variable leaves autonomy on",
     file: VERDICT,
@@ -142,6 +121,7 @@ const TAMPERS = [
     test: VERDICT_TEST,
   },
   {
+    // Parenthesized so `last` keeps its narrowing and the edit type-checks.
     name: "verdict: a merge group whose queue ref names an outside PR is accepted",
     file: VERDICT,
     text: "  if (!last || !out.some((c) => c.number === Number(last[1]))) {",
@@ -150,6 +130,11 @@ const TAMPERS = [
     red: "mergeGroupPrs fails closed when the queue ref's PR is not in the group",
     test: VERDICT_TEST,
   },
+  off(
+    "    if (seen.has(c.number)) {",
+    "mergeGroupPrs fails closed when one PR is named on more than one commit",
+    VERDICT_TEST,
+  ),
 ];
 
 // Run as a command with a red marker; `-t`, anchored to the exact full name,
@@ -158,7 +143,7 @@ const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 await runTampers(
   TAMPERS.map((t) => ({
-    name: t.name,
+    name: t.name ?? `${t.file === VERDICT ? "verdict" : "classifier"}: ${t.red} — rule removed`,
     command: [
       "pnpm",
       "exec",
