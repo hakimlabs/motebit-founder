@@ -20,9 +20,11 @@
  *     and unanswered" protection ended, and a sweep tick landing while the
  *     settlement step awaited refunded the delegator first;
  *   - the operator can record a claim that can never settle UNRECOVERABLE
- *     (`claim_unrecoverable_at`, with evidence). That is a durable marker the
- *     stale sweep AND the retry-exhaustion refund skip on (on a `locked`
- *     allocation), so the escrow STAYS held: releasing it to the
+ *     (`claim_unrecoverable_at`, with evidence). That is a marker the stale
+ *     sweep AND the retry-exhaustion refund skip on (on a `locked`
+ *     allocation) while the claim is still unsettled, so the escrow STAYS
+ *     held; the write that marks the claim settled clears it, so it never
+ *     outlives the claim it names: releasing it to the
  *     hold payer over a valid signed receipt would be a substituted refund.
  *     The authorized exit for such a claim is a pre-settlement dispute.
  *
@@ -55,8 +57,10 @@ export function noteClaimReplay(db: DatabaseDriver, taskId: string, settled: boo
   try {
     if (settled) {
       db.prepare(
-        `UPDATE relay_allocations SET settlement_replay_failures = 0, settlement_blocked_at = NULL
-          WHERE task_id = ? AND (settlement_replay_failures <> 0 OR settlement_blocked_at IS NOT NULL)`,
+        `UPDATE relay_allocations SET settlement_replay_failures = 0, settlement_blocked_at = NULL,
+                claim_unrecoverable_at = NULL, claim_unrecoverable_evidence = NULL
+          WHERE task_id = ? AND (settlement_replay_failures <> 0 OR settlement_blocked_at IS NOT NULL
+            OR claim_unrecoverable_at IS NOT NULL)`,
       ).run(taskId);
       return;
     }

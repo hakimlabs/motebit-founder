@@ -1068,6 +1068,14 @@ const WRITERS: readonly Writer[] = [
       "the filer — a DisputeRequest signed by `filed_by`'s registered key, and `filed_by` must be the allocation's worker or delegator (read from the settlement row / allocation_hold payer, never the body) with the other party as respondent (§4.4); guarded to one non-expired dispute per task",
   },
   {
+    file: R + "task-queue.ts",
+    verb: "UPDATE",
+    table: "relay_allocations",
+    count: 1,
+    principal:
+      "the answer writer (`TaskQueue.writeAnswer`, the answer capability's one holder `answerTask`) clearing a task's allocation claim markers in the write that marks its claim settled — markers only, never an identity column (#1152 M3)",
+  },
+  {
     file: R + "claim-settlement.ts",
     verb: "UPDATE",
     table: "relay_allocations",

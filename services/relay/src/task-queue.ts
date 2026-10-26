@@ -375,6 +375,12 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
           Date.now(),
         );
       }
+      // A settled claim is no longer the kept-claim law's to hold (#1152 M3):
+      // its allocation's markers are cleared in this same write, so a
+      // `claim_unrecoverable_at` never outlives the claim it named and keeps
+      // a later refund (a forward that settled the claim, then exhausted)
+      // from proceeding.
+      if (current.settled === true) this.clearClaimMarkers(taskId);
       this.db.exec("RELEASE write_answer");
     } catch (err) {
       this.db.exec("ROLLBACK TO write_answer");
@@ -382,6 +388,29 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       throw err;
     }
     return current;
+  }
+
+  /** Whether `relay_allocations` carries the v60 claim markers (a bare queue has none). */
+  private claimMarkerColumns: boolean | undefined;
+
+  /** Clear `taskId`'s allocation claim markers (the claim settled). */
+  private clearClaimMarkers(taskId: string): void {
+    if (this.claimMarkerColumns === undefined) {
+      const cols = this.db.prepare("PRAGMA table_info(relay_allocations)").all() as Array<{
+        name: string;
+      }>;
+      this.claimMarkerColumns = cols.some((c) => c.name === "claim_unrecoverable_at");
+    }
+    if (!this.claimMarkerColumns) return;
+    this.db
+      .prepare(
+        `UPDATE relay_allocations
+            SET claim_unrecoverable_at = NULL, claim_unrecoverable_evidence = NULL,
+                settlement_blocked_at = NULL, settlement_replay_failures = 0
+          WHERE task_id = ? AND (claim_unrecoverable_at IS NOT NULL
+            OR settlement_blocked_at IS NOT NULL OR settlement_replay_failures <> 0)`,
+      )
+      .run(taskId);
   }
 
   /** UPDATE the row at `expectedVersion` to `version`; false when it moved on. */

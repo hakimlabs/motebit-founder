@@ -37,6 +37,34 @@ import { TaskQueue } from "../task-queue.js";
 import { cleanupTaskRoutes } from "../task-routing.js";
 import { getAccountBalance } from "../accounts.js";
 import { SETTLEMENT_BLOCKED_AFTER_FAILURES, noteClaimReplay } from "../claim-settlement.js";
+import { allocationHeld } from "../allocation-escrow.js";
+import { forwardOriginSettlement } from "../federation-callbacks.js";
+import { processSettlementRetries } from "../federation.js";
+import type { RelayIdentity } from "../federation.js";
+import { markTaskSettled } from "../task-answer.js";
+// eslint-disable-next-line no-restricted-imports -- the relay identity row is hex
+import { hexToBytes } from "@motebit/encryption";
+
+/** The relay's own identity, as the federation callbacks take it. */
+function relayIdentityOf(r: SyncRelay): RelayIdentity {
+  const row = r.moteDb.db
+    .prepare(
+      "SELECT relay_motebit_id, public_key, private_key_hex, did FROM relay_identity LIMIT 1",
+    )
+    .get() as {
+    relay_motebit_id: string;
+    public_key: string;
+    private_key_hex: string;
+    did: string;
+  };
+  return {
+    relayMotebitId: row.relay_motebit_id,
+    publicKey: hexToBytes(row.public_key),
+    privateKey: hexToBytes(row.private_key_hex),
+    publicKeyHex: row.public_key,
+    did: row.did,
+  };
+}
 
 const DAY = 24 * 60 * 60 * 1000;
 const STALE_HORIZON_MS = 3_600_000; // index.ts STALE_ALLOCATION_HORIZON_MS
@@ -54,6 +82,7 @@ interface World {
 let current: World | undefined;
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   await current?.relay.close();
   current = undefined;
 });
@@ -478,9 +507,8 @@ describe("kept claim: the operator door (resolve-blocked)", () => {
     expect(allocation(w).status).toBe("locked");
     expect(allocation(w).claim_unrecoverable_at).not.toBeNull();
 
-    // Even once every store of the claim is gone, the marker holds the escrow.
-    w.db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(w.S);
-    w.db.prepare("DELETE FROM relay_task_answers WHERE task_id = ?").run(w.S);
+    // While the claim stays unsettled, the marker holds the escrow: neither
+    // the sweep nor a retry-exhaustion refund returns it to the delegator.
     w.relay.taskLifecycle.sweep(Date.now() + 30 * DAY);
     expect(refundExhaustedForward(w.db, { retry_id: "r", settlement_id: "x", task_id: w.S })).toBe(
       "skipped",
@@ -488,6 +516,95 @@ describe("kept claim: the operator door (resolve-blocked)", () => {
     expect(refundRows(w)).toEqual([]);
     expect(allocation(w).status).toBe("locked");
     expect(moneySnapshot(w)).toBe(before);
+  });
+
+  it("a claim recorded unrecoverable that then settles by a forward, which exhausts, is refunded as on main and the marker is cleared", async () => {
+    const w = await world();
+    const r = await claimUnsettled(w);
+    const rec = await door(w, { action: "record-unrecoverable", evidence: "worker unreachable" });
+    expect(rec.status).toBe(200);
+    expect(allocation(w).claim_unrecoverable_at).not.toBeNull();
+
+    // The claim then settles BY a federated forward (the origin's settlement
+    // step), which the peer never acknowledges.
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("peer down");
+    });
+    const held = allocationHeld(w.db, w.A);
+    expect(
+      await forwardOriginSettlement(w.db, relayIdentityOf(w.relay), {
+        taskId: w.S,
+        receiptSignature: r.signature,
+        peerRelayId: "gone",
+        grossAmount: held,
+        platformFeeRate: 0.05,
+        receiptHash: "rh",
+        x402TxHash: null,
+        x402Network: null,
+      }),
+    ).toBe("queued");
+    markTaskSettled(w.q, w.S, r.signature);
+    expect(claimOf(w)?.settled).toBe(true);
+    expect(allocation(w).claim_unrecoverable_at, "a settled claim clears its marker").toBeNull();
+
+    // Retry exhaustion: the gross returns and is refunded to the hold payer.
+    w.db.prepare("UPDATE relay_settlement_retries SET next_retry_at = 0").run();
+    await processSettlementRetries(w.db, relayIdentityOf(w.relay), (retry) => {
+      refundExhaustedForward(w.db, retry);
+    });
+    vi.unstubAllGlobals();
+    expect(balance(w, w.D), "the delegator is refunded, as on main").toBe(held);
+    expect(allocation(w).status).toBe("released");
+    expect(allocationHeld(w.db, w.A)).toBe(0);
+  });
+
+  it("a marker left on a claim that has settled never holds the escrow against retry exhaustion", async () => {
+    // Defense in depth for the probe above: a marker that outlived its claim
+    // (written outside the door, or by a build that did not clear it) is read
+    // only while the claim is unsettled.
+    const w = await world();
+    const r = await claimUnsettled(w);
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("peer down");
+    });
+    const held = allocationHeld(w.db, w.A);
+    expect(
+      await forwardOriginSettlement(w.db, relayIdentityOf(w.relay), {
+        taskId: w.S,
+        receiptSignature: r.signature,
+        peerRelayId: "gone",
+        grossAmount: held,
+        platformFeeRate: 0.05,
+        receiptHash: "rh",
+        x402TxHash: null,
+        x402Network: null,
+      }),
+    ).toBe("queued");
+    markTaskSettled(w.q, w.S, r.signature);
+    w.db
+      .prepare(
+        "UPDATE relay_allocations SET claim_unrecoverable_at = ?, claim_unrecoverable_evidence = 'stale' WHERE allocation_id = ?",
+      )
+      .run(Date.now(), w.A);
+    w.db.prepare("UPDATE relay_settlement_retries SET next_retry_at = 0").run();
+    await processSettlementRetries(w.db, relayIdentityOf(w.relay), (retry) => {
+      refundExhaustedForward(w.db, retry);
+    });
+    vi.unstubAllGlobals();
+    expect(balance(w, w.D)).toBe(held);
+    expect(allocation(w).status).toBe("released");
+    expect(allocationHeld(w.db, w.A)).toBe(0);
+  });
+
+  it("a claim recorded unrecoverable that later settles through recovery clears the marker", async () => {
+    const w = await world();
+    await claimUnsettled(w);
+    expect((await door(w, { action: "record-unrecoverable", evidence: "x" })).status).toBe(200);
+    crash(w, false);
+    const rep = await w.relay.settlementRecovery.sweep({ graceMs: 0 });
+    expect(rep.settled).toContain(w.S);
+    expect(allocation(w).claim_unrecoverable_at).toBeNull();
+    expect(allocation(w).status).toBe("settled");
   });
 
   it("refuses both claim actions while the allocation is disputed", async () => {

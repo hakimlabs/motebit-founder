@@ -2786,9 +2786,10 @@ export const relayMigrations: Migration[] = [
       // refunded over the valid receipt. Two markers on the allocation:
       //   - `claim_unrecoverable_at` (+ the operator's evidence): written only
       //     by the operator door `POST /api/v1/admin/allocations/:id/
-      //     resolve-blocked` (`record-unrecoverable`). Durable: the stale
-      //     sweep, task-cleanup and retry-exhaustion refund skip on it, so the
-      //     escrow STAYS held. It moves no money.
+      //     resolve-blocked` (`record-unrecoverable`). While the claim is
+      //     unsettled, the stale sweep, task-cleanup and retry-exhaustion
+      //     refund skip on it, so the escrow STAYS held; the write that marks
+      //     the claim settled clears it. It moves no money.
       //   - `settlement_blocked_at` (+ the consecutive replay-failure count):
       //     set by the settlement-recovery sweep after 12 consecutive failed
       //     replays of the claim. Visibility only (admin health); no money

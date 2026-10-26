@@ -357,9 +357,12 @@ export function releaseStaleAllocations(
           });
           continue;
         }
-        // A claim the operator recorded unrecoverable keeps its escrow held,
-        // even once its stores are gone: no timeout picks the delegator.
-        if (alloc.claim_unrecoverable_at != null) continue;
+        // A claim the operator recorded unrecoverable keeps its escrow held
+        // while it is still unsettled (no timeout picks the delegator). The
+        // stores are never released today, so this is the skip above again;
+        // it stays so the marker is read here once stores can be released.
+        if (alloc.claim_unrecoverable_at != null && holdsUnsettledClaim(db, alloc.task_id))
+          continue;
         // What the ledger still holds — the one primitive every refund of an
         // allocation pays out of (allocation-escrow.ts). Holds − releases
         // alone (F3) missed a federated origin's forward.
@@ -476,12 +479,16 @@ export function refundExhaustedForward(
     }
     const held = allocationEscrowHeld(db, alloc.allocation_id);
     // The kept-claim law (#1152 M3): on a still-`locked` allocation, a claim
-    // the operator recorded unrecoverable keeps its escrow held — never
+    // the operator recorded unrecoverable, while it is still unsettled,
+    // keeps its escrow held — never
     // refunded to the delegator over the valid receipt. (An unsettled claim
     // alone does not stop this refund: a federated origin's claim settles BY
     // this forward, and exhaustion is the evidence it was never delivered.)
     // An allocation a verdict already closed is not the claim's to hold.
-    const claimHeld = alloc.status === "locked" && alloc.claim_unrecoverable_at != null;
+    const claimHeld =
+      alloc.status === "locked" &&
+      alloc.claim_unrecoverable_at != null &&
+      holdsUnsettledClaim(db, retry.task_id);
     if (alloc.status === "disputed" || claimHeld || held <= 0) {
       db.exec("COMMIT");
       retryRefundLogger.info("settlement.retry.refund_skipped", {

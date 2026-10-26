@@ -12,8 +12,12 @@
  *   - the stale sweep's claim skip removed — the race (a) and the sweep-skip
  *     cases go red; `holdsUnsettledClaim` reading only the queue — the
  *     archive-read case goes red;
- *   - the sweep's / retry exhaustion's `claim_unrecoverable_at` skip removed
- *     — the record-unrecoverable case goes red;
+ *   - retry exhaustion's `claim_unrecoverable_at` skip removed — the
+ *     record-unrecoverable case goes red (the sweep's marker skip is today
+ *     subsumed by its unsettled-claim skip, so it has no entry of its own);
+ *   - F1: a settled claim not clearing its markers, and retry exhaustion
+ *     holding on a marker whose claim already settled — the forward probe
+ *     and the stale-marker cases go red;
  *   - the 12-failure mark never set, or a disputed replay counted — the
  *     visibility cases go red;
  *   - the door's disputed refusal removed — the disputed case goes red;
@@ -70,6 +74,8 @@ const BLOCKED = `${V} is set after 12 consecutive failed replays; retries contin
 const DISPUTED_COUNT = `${V} a replay on a disputed allocation is not counted as a failure`;
 const D = "kept claim: the operator door (resolve-blocked)";
 const UNRECOVERABLE = `${D} record-unrecoverable moves no money, keeps the escrow held, and no sweep or retry refund ever refunds it`;
+const PROBE = `${D} a claim recorded unrecoverable that then settles by a forward, which exhausts, is refunded as on main and the marker is cleared`;
+const STALE_MARKER = `${D} a marker left on a claim that has settled never holds the escrow against retry exhaustion`;
 const DOOR_DISPUTED = `${D} refuses both claim actions while the allocation is disputed`;
 
 const FLOOR_FROM = "    const heldClaim = UNSETTLED_CLAIM_IN_QUEUE;";
@@ -133,26 +139,37 @@ const TAMPERS = [
     ...only(SWEEP_ARCHIVE),
   },
   {
-    name: "the stale sweep's claim_unrecoverable_at skip removed",
+    name: "retry exhaustion's claim_unrecoverable_at skip removed",
     edits: [
       {
         file: INDEX,
-        from: "        if (alloc.claim_unrecoverable_at != null) continue;",
-        to: "        void alloc.claim_unrecoverable_at;",
+        from: '      alloc.status === "locked" &&\n      alloc.claim_unrecoverable_at != null &&\n',
+        to: "      (false as boolean) &&\n      alloc.claim_unrecoverable_at != null &&\n",
       },
     ],
     ...only(UNRECOVERABLE),
   },
   {
-    name: "retry exhaustion's claim_unrecoverable_at skip removed",
+    name: "a settled claim no longer clears its allocation's markers (F1a)",
+    edits: [
+      {
+        file: QUEUE,
+        from: "      if (current.settled === true) this.clearClaimMarkers(taskId);",
+        to: "      if ((false as boolean) && current.settled === true) this.clearClaimMarkers(taskId);",
+      },
+    ],
+    ...only(PROBE),
+  },
+  {
+    name: "retry exhaustion holds on a marker whose claim already settled (F1b)",
     edits: [
       {
         file: INDEX,
-        from: '    const claimHeld = alloc.status === "locked" && alloc.claim_unrecoverable_at != null;',
-        to: "    const claimHeld = (false as boolean) && alloc.claim_unrecoverable_at != null;",
+        from: "      alloc.claim_unrecoverable_at != null &&\n      holdsUnsettledClaim(db, retry.task_id);",
+        to: "      alloc.claim_unrecoverable_at != null;",
       },
     ],
-    ...only(UNRECOVERABLE),
+    ...only(STALE_MARKER),
   },
   {
     name: "settlement_blocked_at never set",
