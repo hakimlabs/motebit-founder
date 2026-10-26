@@ -17,7 +17,9 @@
  *     subsumed by its unsettled-claim skip, so it has no entry of its own);
  *   - F1: a settled claim not clearing its markers, and retry exhaustion
  *     holding on a marker whose claim already settled — the forward probe
- *     and the stale-marker cases go red;
+ *     and the stale-marker cases go red; the settle erasing the operator's
+ *     evidence or not stamping `claim_unrecoverable_cleared_at` — the forward
+ *     probe goes red;
  *   - the 12-failure mark never set, or a disputed replay counted — the
  *     visibility cases go red;
  *   - the door's disputed refusal removed — the disputed case goes red;
@@ -170,6 +172,28 @@ const TAMPERS = [
       },
     ],
     ...only(STALE_MARKER),
+  },
+  {
+    name: "a settled claim erases the operator's evidence (audit trail)",
+    edits: [
+      {
+        file: QUEUE,
+        from: "                claim_unrecoverable_at = NULL,\n                settlement_blocked_at = NULL, settlement_replay_failures = 0",
+        to: "                claim_unrecoverable_at = NULL, claim_unrecoverable_evidence = NULL,\n                settlement_blocked_at = NULL, settlement_replay_failures = 0",
+      },
+    ],
+    ...only(PROBE),
+  },
+  {
+    name: "a settled claim records no claim_unrecoverable_cleared_at (audit trail)",
+    edits: [
+      {
+        file: QUEUE,
+        from: "            SET claim_unrecoverable_cleared_at = CASE WHEN claim_unrecoverable_at IS NOT NULL\n                  THEN ? ELSE claim_unrecoverable_cleared_at END,",
+        to: "            SET claim_unrecoverable_cleared_at = CASE WHEN claim_unrecoverable_at IS NOT NULL AND ? IS NULL\n                  THEN 1 ELSE claim_unrecoverable_cleared_at END,",
+      },
+    ],
+    ...only(PROBE),
   },
   {
     name: "settlement_blocked_at never set",

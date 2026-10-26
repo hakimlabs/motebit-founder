@@ -58,10 +58,12 @@ export function noteClaimReplay(db: DatabaseDriver, taskId: string, settled: boo
     if (settled) {
       db.prepare(
         `UPDATE relay_allocations SET settlement_replay_failures = 0, settlement_blocked_at = NULL,
-                claim_unrecoverable_at = NULL, claim_unrecoverable_evidence = NULL
+                claim_unrecoverable_cleared_at = CASE WHEN claim_unrecoverable_at IS NOT NULL
+                  THEN ? ELSE claim_unrecoverable_cleared_at END,
+                claim_unrecoverable_at = NULL
           WHERE task_id = ? AND (settlement_replay_failures <> 0 OR settlement_blocked_at IS NOT NULL
             OR claim_unrecoverable_at IS NOT NULL)`,
-      ).run(taskId);
+      ).run(Date.now(), taskId);
       return;
     }
     db.prepare(
@@ -251,7 +253,8 @@ export function registerClaimResolveRoutes(deps: ClaimResolveRouteDeps): void {
     const now = Date.now();
     const changed = db
       .prepare(
-        `UPDATE relay_allocations SET claim_unrecoverable_at = ?, claim_unrecoverable_evidence = ?
+        `UPDATE relay_allocations SET claim_unrecoverable_at = ?, claim_unrecoverable_evidence = ?,
+                claim_unrecoverable_cleared_at = NULL
           WHERE allocation_id = ? AND claim_unrecoverable_at IS NULL AND status <> 'disputed'`,
       )
       .run(now, evidence, allocationId).changes;

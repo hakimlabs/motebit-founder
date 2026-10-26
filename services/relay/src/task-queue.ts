@@ -393,7 +393,11 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
   /** Whether `relay_allocations` carries the v60 claim markers (a bare queue has none). */
   private claimMarkerColumns: boolean | undefined;
 
-  /** Clear `taskId`'s allocation claim markers (the claim settled). */
+  /**
+   * Clear `taskId`'s allocation claim markers (the claim settled). The audit
+   * trail stays: `claim_unrecoverable_evidence` is kept and
+   * `claim_unrecoverable_cleared_at` records when the claim later settled.
+   */
   private clearClaimMarkers(taskId: string): void {
     if (this.claimMarkerColumns === undefined) {
       const cols = this.db.prepare("PRAGMA table_info(relay_allocations)").all() as Array<{
@@ -405,12 +409,14 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     this.db
       .prepare(
         `UPDATE relay_allocations
-            SET claim_unrecoverable_at = NULL, claim_unrecoverable_evidence = NULL,
+            SET claim_unrecoverable_cleared_at = CASE WHEN claim_unrecoverable_at IS NOT NULL
+                  THEN ? ELSE claim_unrecoverable_cleared_at END,
+                claim_unrecoverable_at = NULL,
                 settlement_blocked_at = NULL, settlement_replay_failures = 0
           WHERE task_id = ? AND (claim_unrecoverable_at IS NOT NULL
             OR settlement_blocked_at IS NOT NULL OR settlement_replay_failures <> 0)`,
       )
-      .run(taskId);
+      .run(Date.now(), taskId);
   }
 
   /** UPDATE the row at `expectedVersion` to `version`; false when it moved on. */

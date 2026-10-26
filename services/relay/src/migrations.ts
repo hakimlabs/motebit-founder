@@ -2789,7 +2789,8 @@ export const relayMigrations: Migration[] = [
       //     resolve-blocked` (`record-unrecoverable`). While the claim is
       //     unsettled, the stale sweep, task-cleanup and retry-exhaustion
       //     refund skip on it, so the escrow STAYS held; the write that marks
-      //     the claim settled clears it. It moves no money.
+      //     the claim settled clears it and stamps `claim_unrecoverable_cleared_at`,
+      //     keeping the evidence (the audit trail). It moves no money.
       //   - `settlement_blocked_at` (+ the consecutive replay-failure count):
       //     set by the settlement-recovery sweep after 12 consecutive failed
       //     replays of the claim. Visibility only (admin health); no money
@@ -2809,6 +2810,7 @@ export const relayMigrations: Migration[] = [
       };
       add("claim_unrecoverable_at", "INTEGER");
       add("claim_unrecoverable_evidence", "TEXT");
+      add("claim_unrecoverable_cleared_at", "INTEGER");
       add("settlement_blocked_at", "INTEGER");
       add("settlement_replay_failures", "INTEGER NOT NULL DEFAULT 0");
     },

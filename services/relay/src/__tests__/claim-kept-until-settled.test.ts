@@ -210,12 +210,14 @@ const allocation = (
 ): {
   status: string;
   claim_unrecoverable_at: number | null;
+  claim_unrecoverable_evidence: string | null;
+  claim_unrecoverable_cleared_at: number | null;
   settlement_blocked_at: number | null;
   settlement_replay_failures: number;
 } =>
   w.db
     .prepare(
-      "SELECT status, claim_unrecoverable_at, settlement_blocked_at, settlement_replay_failures FROM relay_allocations WHERE allocation_id = ?",
+      "SELECT status, claim_unrecoverable_at, claim_unrecoverable_evidence, claim_unrecoverable_cleared_at, settlement_blocked_at, settlement_replay_failures FROM relay_allocations WHERE allocation_id = ?",
     )
     .get(w.A) as never;
 const moneySnapshot = (w: World): string =>
@@ -546,6 +548,13 @@ describe("kept claim: the operator door (resolve-blocked)", () => {
     markTaskSettled(w.q, w.S, r.signature);
     expect(claimOf(w)?.settled).toBe(true);
     expect(allocation(w).claim_unrecoverable_at, "a settled claim clears its marker").toBeNull();
+    expect(allocation(w).claim_unrecoverable_evidence, "the audit trail keeps the evidence").toBe(
+      "worker unreachable",
+    );
+    expect(
+      allocation(w).claim_unrecoverable_cleared_at,
+      "and records when it settled",
+    ).not.toBeNull();
 
     // Retry exhaustion: the gross returns and is refunded to the hold payer.
     w.db.prepare("UPDATE relay_settlement_retries SET next_retry_at = 0").run();
@@ -604,6 +613,8 @@ describe("kept claim: the operator door (resolve-blocked)", () => {
     const rep = await w.relay.settlementRecovery.sweep({ graceMs: 0 });
     expect(rep.settled).toContain(w.S);
     expect(allocation(w).claim_unrecoverable_at).toBeNull();
+    expect(allocation(w).claim_unrecoverable_evidence).toBe("x");
+    expect(allocation(w).claim_unrecoverable_cleared_at).not.toBeNull();
     expect(allocation(w).status).toBe("settled");
   });
 
