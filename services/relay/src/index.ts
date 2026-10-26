@@ -200,11 +200,16 @@ import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
 import { observeHostConnection, sweepHostLiveness } from "./host-roster-store.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
-import { recoverSettlements, SETTLEMENT_RECOVERY_CLOSE_BOUND_MS } from "./settlement-recovery.js";
+import {
+  recoverSettlements,
+  replayClaim,
+  SETTLEMENT_RECOVERY_CLOSE_BOUND_MS,
+} from "./settlement-recovery.js";
+import { registerClaimResolveRoutes, settlementClaimHealth } from "./claim-settlement.js";
 import type { SettlementRecoveryDeps, SettlementRecoveryReport } from "./settlement-recovery.js";
 import { registerTaskRoutes, TASK_TTL_MS, workerKeyFor } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
-import { TaskQueue, installSettlementGuards } from "./task-queue.js";
+import { TaskQueue, installSettlementGuards, holdsUnsettledClaim } from "./task-queue.js";
 import {
   registerCommandRoutes,
   handleCommandResponse,
@@ -314,13 +319,14 @@ export function releaseStaleAllocations(
     const cutoff = now - horizonMs;
     const stale = db
       .prepare(
-        "SELECT allocation_id, task_id, motebit_id, amount_locked FROM relay_allocations WHERE status = 'locked' AND created_at < ?",
+        "SELECT allocation_id, task_id, motebit_id, amount_locked, claim_unrecoverable_at FROM relay_allocations WHERE status = 'locked' AND created_at < ?",
       )
       .all(cutoff) as Array<{
       allocation_id: string;
       task_id: string;
       motebit_id: string;
       amount_locked: number;
+      claim_unrecoverable_at: number | null;
     }>;
     if (stale.length === 0) return 0;
 
@@ -339,6 +345,21 @@ export function releaseStaleAllocations(
           flagForReview(alloc.allocation_id, "undetermined");
           continue;
         }
+        // The kept-claim law (#1152 M3, claim-settlement.ts): a task whose
+        // answer is claimed and not settled holds a valid signed receipt, so
+        // its escrow is never refunded over it. Read from the stores (the
+        // queue entry OR the archived answer), in this same synchronous turn:
+        // a settlement step still awaiting before its transaction is covered.
+        if (holdsUnsettledClaim(db, alloc.task_id)) {
+          staleAllocationLogger.info("stale_allocation.claim_unsettled_skipped", {
+            allocationId: alloc.allocation_id,
+            taskId: alloc.task_id,
+          });
+          continue;
+        }
+        // A claim the operator recorded unrecoverable keeps its escrow held,
+        // even once its stores are gone: no timeout picks the delegator.
+        if (alloc.claim_unrecoverable_at != null) continue;
         // What the ledger still holds — the one primitive every refund of an
         // allocation pays out of (allocation-escrow.ts). Holds − releases
         // alone (F3) missed a federated origin's forward.
@@ -428,10 +449,16 @@ export function refundExhaustedForward(
   try {
     const alloc = db
       .prepare(
-        "SELECT allocation_id, status, amount_locked FROM relay_allocations WHERE task_id = ?",
+        "SELECT allocation_id, status, amount_locked, claim_unrecoverable_at FROM relay_allocations WHERE task_id = ?",
       )
       .get(retry.task_id) as
-      { allocation_id: string; status: string; amount_locked: number } | undefined;
+      | {
+          allocation_id: string;
+          status: string;
+          amount_locked: number;
+          claim_unrecoverable_at: number | null;
+        }
+      | undefined;
     if (!alloc) {
       db.exec("ROLLBACK");
       return "skipped";
@@ -448,7 +475,14 @@ export function refundExhaustedForward(
       returned = true;
     }
     const held = allocationEscrowHeld(db, alloc.allocation_id);
-    if (alloc.status === "disputed" || held <= 0) {
+    // The kept-claim law (#1152 M3): on a still-`locked` allocation, a claim
+    // the operator recorded unrecoverable keeps its escrow held — never
+    // refunded to the delegator over the valid receipt. (An unsettled claim
+    // alone does not stop this refund: a federated origin's claim settles BY
+    // this forward, and exhaustion is the evidence it was never delivered.)
+    // An allocation a verdict already closed is not the claim's to hold.
+    const claimHeld = alloc.status === "locked" && alloc.claim_unrecoverable_at != null;
+    if (alloc.status === "disputed" || claimHeld || held <= 0) {
       db.exec("COMMIT");
       retryRefundLogger.info("settlement.retry.refund_skipped", {
         retryId: retry.retry_id,
@@ -458,7 +492,9 @@ export function refundExhaustedForward(
         reason:
           alloc.status === "disputed"
             ? "allocation under dispute — its fund action distributes the escrow"
-            : "allocation holds nothing on the ledger — never debited or already released",
+            : claimHeld
+              ? "settlement claim recorded unrecoverable — the escrow stays held"
+              : "allocation holds nothing on the ledger — never debited or already released",
       });
       return returned ? "returned" : "skipped";
     }
@@ -2048,6 +2084,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // The daily look sees the auth surface: master-token presentations and
       // refused tokens in the last 24h. Full breakdown at /admin/auth-events.
       auth_events_24h: authEventCounts24h(),
+      // Settlement claims recovery could not settle (12 consecutive failed
+      // replays — visibility only, retries continue) and the ones the
+      // operator recorded unrecoverable (escrow held). #1152 M3.
+      settlement_claims: settlementClaimHealth(moteDb.db),
     });
   });
 
@@ -2801,6 +2841,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       ),
     isFrozen: () => getEmergencyFreeze(),
   };
+  // The operator door for a claim recovery cannot settle (#1152 M3/M5, PR-1
+  // actions): re-attempt through recovery's own door, or record it
+  // unrecoverable (a marker; the escrow stays held).
+  registerClaimResolveRoutes({
+    app,
+    db: moteDb.db,
+    replayClaim: (taskId) => replayClaim(recoveryDeps, taskId),
+  });
   let recoveryInFlight: Promise<SettlementRecoveryReport> | null = null;
   const runSettlementRecovery = (
     opts: { graceMs?: number; now?: number } = {},

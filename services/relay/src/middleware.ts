@@ -754,6 +754,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/admin/freeze-status", rl(readLimiter));
   app.use("/api/v1/admin/x402-settlements", rl(readLimiter));
   app.use("/api/v1/admin/x402-settlements/*", rl(writeLimiter));
+  app.use("/api/v1/admin/allocations/*", rl(writeLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rl(writeLimiter));
@@ -1403,6 +1404,8 @@ export function registerAuthMiddleware(
   // Admin x402 settlement records (#907 round 3): list + proof-of-execution resolve.
   app.use("/api/v1/admin/x402-settlements", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/x402-settlements/*", bearerAuth({ token: apiToken }));
+  // Admin settlement-claim door (#1152 M3): re-attempt / record-unrecoverable.
+  app.use("/api/v1/admin/allocations/*", bearerAuth({ token: apiToken }));
   // Admin receipt audit — master token only; serves byte-identical
   // canonical JSON so an auditor can re-verify the signature offline.
   app.use("/api/v1/admin/receipts/*", bearerAuth({ token: apiToken }));

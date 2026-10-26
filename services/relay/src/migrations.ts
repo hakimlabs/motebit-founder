@@ -2777,4 +2777,39 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 60,
+    name: "allocation_claim_markers",
+    up: (db) => {
+      // The kept-claim law (#1152 M3, claim-settlement.ts). A claimed-but-
+      // unsettled answer is kept until it settles, and its escrow is never
+      // refunded over the valid receipt. Two markers on the allocation:
+      //   - `claim_unrecoverable_at` (+ the operator's evidence): written only
+      //     by the operator door `POST /api/v1/admin/allocations/:id/
+      //     resolve-blocked` (`record-unrecoverable`). Durable: the stale
+      //     sweep, task-cleanup and retry-exhaustion refund skip on it, so the
+      //     escrow STAYS held. It moves no money.
+      //   - `settlement_blocked_at` (+ the consecutive replay-failure count):
+      //     set by the settlement-recovery sweep after 12 consecutive failed
+      //     replays of the claim. Visibility only (admin health); no money
+      //     path reads it, and recovery keeps retrying.
+      // Nullable, no backfill: no allocation before this was marked.
+      const has = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'relay_allocations'")
+        .get();
+      if (has === undefined) return;
+      const cols = new Set(
+        (db.prepare("PRAGMA table_info(relay_allocations)").all() as Array<{ name: string }>).map(
+          (c) => c.name,
+        ),
+      );
+      const add = (name: string, type: string): void => {
+        if (!cols.has(name)) db.exec(`ALTER TABLE relay_allocations ADD COLUMN ${name} ${type}`);
+      };
+      add("claim_unrecoverable_at", "INTEGER");
+      add("claim_unrecoverable_evidence", "TEXT");
+      add("settlement_blocked_at", "INTEGER");
+      add("settlement_replay_failures", "INTEGER NOT NULL DEFAULT 0");
+    },
+  },
 ];
