@@ -66,10 +66,12 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: "22"
-          cache: "pnpm"
-          cache-dependency-path: trusted/pnpm-lock.yaml
+          # NO dependency cache: a cache a PR-scoped run wrote could poison
+          # tsx or a dependency in the trusted checkout. setup-node's automatic
+          # package-manager cache is switched off explicitly too.
+          package-manager-cache: false
 
-      - name: Install the base's dependencies
+      - name: Install the base's dependencies (uncached)
         working-directory: trusted
         run: pnpm install --frozen-lockfile
 

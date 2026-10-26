@@ -7,8 +7,10 @@
  * EVERY changed path
  *   1. is in the closed ALLOWLIST below (and in none of its exclusions),
  *   2. is a plain added or modified text file — no rename, deletion, mode
- *      change, symlink, submodule or binary content, and
- *   3. has no owner in `.github/CODEOWNERS` (defence in depth: an allowlisted
+ *      change, symlink, submodule or binary content,
+ *   3. differs only by case from no excluded path, no tracked path and no
+ *      other path of the diff (exclusions also match case-insensitively), and
+ *   4. has no owner in `.github/CODEOWNERS` (defence in depth: an allowlisted
  *      path that becomes owned is T1 at once).
  * Anything else is T1 (founder only). The diff itself must parse; an empty or
  * unparseable diff, or the classifier's own error, is T1.
@@ -21,14 +23,15 @@
  * through paths it did not list. Widening T0 is an edit to ALLOWLIST in this
  * file, which CODEOWNERS owns — so every widening is itself a T1 change.
  *
- * PURE core (`classifyDiff`): diff text + CODEOWNERS text in, verdict out.
+ * PURE core (`classifyDiff`): diff text + CODEOWNERS text + the trusted
+ * base's tracked paths in, verdict out.
  * Path matching for both the allowlist and CODEOWNERS is
  * `scripts/lib/codeowners.ts` (`patternToRegex`, `decidingRule`).
  *
  * CLI:
  *   tsx scripts/classify-autonomy-tier.ts --repo <dir> --base <rev> --head <rev>
  *   tsx scripts/classify-autonomy-tier.ts --diff <file|->
- * CODEOWNERS is read from THIS script's checkout (the trusted base), never
+ * CODEOWNERS and the tracked paths are read from THIS script's checkout (the trusted base), never
  * from the diff's head. Prints one JSON line, then a one-line summary. Exit 0
  * on any classification (T0 or T1); exit 2 only on a classifier error, after
  * printing a T1 `classifier-error` verdict — callers treat non-zero as T1.
@@ -49,17 +52,22 @@ import { cleanEnv } from "./lib/differential-tree.js";
  * widening is a visible diff in this owned file.
  */
 export const ALLOWLIST = {
-  include: [
-    "docs/**/*.md",
-    "apps/docs/content/**/*.md",
-    "apps/docs/content/**/*.mdx",
-    "scripts/bench/**/*.json",
-  ],
+  /**
+   * Every consumer of these paths reads them as inert text or data (audited
+   * 2026-10-26, listed in the PR): markdown under docs/ is only matched and
+   * counted by gates — the one gate that EXECUTES doc content
+   * (check-image-provenance, cosign lines) reads docs/operator/self-host.md,
+   * which is excluded; the bench JSON is `JSON.parse`d as prompts by a
+   * workflow_dispatch-only bench with network-free tools. `apps/docs/content`
+   * is NOT here: fumadocs-mdx evaluates MDX ESM at build, and
+   * check-docs-quickstart-runs runs a code block from it under CI env.
+   */
+  include: ["docs/**/*.md", "scripts/bench/**/*.json"],
   /**
    * Inside an include, still T1: agent-facing doctrine, the autonomy design
-   * itself, runbooks, designs, the drift inventory, and operator-facing docs
-   * (they carry deploy pins — e.g. the relay image in docs/operator/self-host.md —
-   * and security posture).
+   * itself, runbooks, designs, the drift inventory, operator-facing docs (deploy
+   * pins and security posture), and agent instructions under any name or
+   * depth. Matched case-insensitively.
    */
   exclude: [
     "docs/doctrine/**",
@@ -68,15 +76,59 @@ export const ALLOWLIST = {
     "docs/design/**",
     "docs/drift-defenses.md",
     "docs/operator/**",
-    "apps/docs/content/**/operator/**",
+    "**/CLAUDE.md",
+    "**/AGENTS.md",
+    "**/.claude/**",
+    "**/SKILL.md",
+    "skills/**",
   ],
 } as const;
 
 const INCLUDE = ALLOWLIST.include.map(patternToRegex);
 const EXCLUDE = ALLOWLIST.exclude.map(patternToRegex);
+/** Exclusions hold whatever the case (a case-insensitive filesystem, or a reader that folds case). */
+const EXCLUDE_ANY_CASE = EXCLUDE.map((r) => new RegExp(r.source, "i"));
 
 export function isAllowlisted(path: string): boolean {
-  return INCLUDE.some((r) => r.test(path)) && !EXCLUDE.some((r) => r.test(path));
+  return INCLUDE.some((r) => r.test(path)) && !EXCLUDE_ANY_CASE.some((r) => r.test(path));
+}
+
+/**
+ * Why `path` collides by case, or null: it is excluded only once case is
+ * folded (it differs only by case from an exclusion), or it — or one of its
+ * directories — differs only by case from a tracked path or another path of
+ * the same diff.
+ */
+export function caseCollision(
+  path: string,
+  known: ReadonlyMap<string, ReadonlySet<string>>,
+): string | null {
+  if (EXCLUDE_ANY_CASE.some((r) => r.test(path)) && !EXCLUDE.some((r) => r.test(path))) {
+    return `${path} differs only by case from an excluded path`;
+  }
+  const parts = path.split("/");
+  for (let k = 1; k <= parts.length; k++) {
+    const q = parts.slice(0, k).join("/");
+    const other = [...(known.get(q.toLowerCase()) ?? [])].find((x) => x !== q);
+    if (other !== undefined) return `${q} differs only by case from ${other}`;
+  }
+  return null;
+}
+
+/** Lower-cased path and directory → the exact spellings that exist. */
+export function caseIndex(paths: Iterable<string>): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const p of paths) {
+    const parts = p.split("/");
+    for (let k = 1; k <= parts.length; k++) {
+      const q = parts.slice(0, k).join("/");
+      const key = q.toLowerCase();
+      let s = out.get(key);
+      if (!s) out.set(key, (s = new Set()));
+      s.add(q);
+    }
+  }
+  return out;
 }
 
 // ── Rules ────────────────────────────────────────────────────────────────────
@@ -96,6 +148,10 @@ export const RULES = {
   binary: { category: "fail-closed", what: "binary content" },
   submodule: { category: "fail-closed", what: "a submodule change" },
   symlink: { category: "fail-closed", what: "a symlink change" },
+  "case-collision": {
+    category: "fail-closed",
+    what: "a path that differs only by case from an excluded, tracked, or other changed path",
+  },
   "unparseable-diff": {
     category: "fail-closed",
     what: "a diff the classifier cannot fetch or parse",
@@ -326,6 +382,8 @@ export interface ClassifyInput {
   diff: string;
   /** Text of `.github/CODEOWNERS` (from the trusted base). */
   codeowners: string;
+  /** Every path tracked at the trusted base (`git ls-files`), for the case-collision rule. */
+  trackedPaths: readonly string[];
 }
 
 export function classifyDiff(input: ClassifyInput): Classification {
@@ -355,6 +413,11 @@ export function classifyDiff(input: ClassifyInput): Classification {
     }
     files = parsed.length;
 
+    const changedPaths = parsed
+      .flatMap((f) => [f.oldPath, f.newPath])
+      .filter((x): x is string => x !== null);
+    const known = caseIndex([...input.trackedPaths, ...changedPaths]);
+
     for (const f of parsed) {
       const label = f.newPath ?? f.oldPath!;
       if (f.renamed) fire("rename", label, `renamed or copied ${f.oldPath} → ${f.newPath}`);
@@ -372,6 +435,8 @@ export function classifyDiff(input: ClassifyInput): Classification {
       // Both names of a rename are judged.
       for (const p of new Set([f.oldPath, f.newPath].filter((x): x is string => x !== null))) {
         if (!isAllowlisted(p)) fire("not-allowlisted", p, `${p} is outside the T0 allowlist`);
+        const collision = caseCollision(p, known);
+        if (collision !== null) fire("case-collision", p, collision);
         const r = decidingRule(rules, p);
         if (r && r.owners.length > 0) {
           fire(
@@ -424,6 +489,18 @@ export function readTrustedCodeowners(root: string = SELF_ROOT): string {
   return readFileSync(join(root, ".github/CODEOWNERS"), "utf-8");
 }
 
+/** Every path tracked in the trusted checkout. */
+export function readTrustedPaths(root: string = SELF_ROOT): string[] {
+  return execFileSync("git", ["ls-files", "-z"], {
+    cwd: root,
+    env: cleanEnv(),
+    encoding: "utf-8",
+    maxBuffer: 256 * 1024 * 1024,
+  })
+    .split("\0")
+    .filter((p) => p !== "");
+}
+
 /** `git diff --find-renames base...head` (three-dot: the PR's own changes), or `base..head`. */
 export function gitDiff(repo: string, baseRev: string, headRev: string, threeDot = true): string {
   return execFileSync(
@@ -461,7 +538,11 @@ export function classifyRevisions(
       0,
     );
   }
-  return classifyDiff({ diff, codeowners: readTrustedCodeowners() });
+  return classifyDiff({
+    diff,
+    codeowners: readTrustedCodeowners(),
+    trackedPaths: readTrustedPaths(),
+  });
 }
 
 function argValue(argv: readonly string[], flag: string): string | undefined {
@@ -478,7 +559,11 @@ export function main(argv: readonly string[]): number {
     let result: Classification;
     if (diffArg !== undefined) {
       const diff = diffArg === "-" ? readFileSync(0, "utf-8") : readFileSync(diffArg, "utf-8");
-      result = classifyDiff({ diff, codeowners: readTrustedCodeowners() });
+      result = classifyDiff({
+        diff,
+        codeowners: readTrustedCodeowners(),
+        trackedPaths: readTrustedPaths(),
+      });
     } else if (repo !== undefined && baseRev !== undefined && headRev !== undefined) {
       result = classifyRevisions(repo, baseRev, headRev);
     } else {

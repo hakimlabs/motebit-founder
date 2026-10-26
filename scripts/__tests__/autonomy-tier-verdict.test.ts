@@ -8,7 +8,11 @@
  *   and the only approval is the machine user's.
  *
  * Refinements the oracle states explicitly: a classifier error is T1; a
- * founder approval counts only on the current head; the kill switch is
+ * founder approval counts only on the current head and only with a trusted
+ * `author_association` (OWNER / MEMBER / COLLABORATOR); with the kill switch
+ * engaged ONLY such a founder approval passes a machine-approved PR — the repo
+ * is public, so any other account's approval (an outsider's, or even a
+ * collaborator's) does not count as "another approval"; the kill switch is
  * disengaged only by the exact value "on" (unset/empty engage it).
  */
 import { describe, expect, it } from "vitest";
@@ -16,6 +20,7 @@ import { describe, expect, it } from "vitest";
 import {
   FOUNDER,
   MACHINE_REVIEWER,
+  TRUSTED_ASSOCIATIONS,
   decide,
   decidePr,
   killSwitchEngaged,
@@ -27,19 +32,25 @@ import {
 
 const HEAD = "a".repeat(40);
 const OLD = "b".repeat(40);
+const T_BASE = Date.parse("2026-10-26T00:00:00Z");
 let nextId = 1;
 const review = (
   login: string,
   state: string,
   commitId = HEAD,
-  at = `2026-10-26T00:00:${String(nextId).padStart(2, "0")}Z`,
-): Review => ({
-  id: nextId++,
-  login,
-  state,
-  commitId,
-  submittedAt: at,
-});
+  at?: string,
+  association: string | null = "MEMBER",
+): Review => {
+  const id = nextId++;
+  return {
+    id,
+    login,
+    state,
+    commitId,
+    submittedAt: at ?? new Date(T_BASE + id * 1000).toISOString(),
+    association,
+  };
+};
 
 const pr = (tier: PrInput["tier"], reviews: Review[]): PrInput => ({
   number: 1,
@@ -51,33 +62,44 @@ const pr = (tier: PrInput["tier"], reviews: Review[]): PrInput => ({
 
 type Founder = "none" | "head" | "stale" | "changes-requested";
 type Machine = "none" | "approved" | "approved-stale" | "dismissed" | "commented";
+type Other = "none" | "collaborator" | "outsider";
+type Association = "OWNER" | "MEMBER" | "COLLABORATOR" | "CONTRIBUTOR" | "NONE" | null;
 
 function oracle(
   tier: PrInput["tier"],
   founder: Founder,
+  founderAssociation: Association,
   machine: Machine,
-  other: boolean,
+  _other: Other,
   killVar: string | undefined,
 ): boolean {
   const machineApproved = machine === "approved" || machine === "approved-stale";
-  const founderApproved = founder === "head";
-  const isT0 = tier === "T0";
+  const founderApproved =
+    founder === "head" &&
+    (founderAssociation === "OWNER" ||
+      founderAssociation === "MEMBER" ||
+      founderAssociation === "COLLABORATOR");
   if (founderApproved) return true;
   if (!machineApproved) return true;
-  if (!isT0) return false; // machine approved a T1 (or errored) PR
-  const killOn = killVar !== "on";
-  const onlyMachine = !other; // `other` approves HEAD; a stale founder approval is not another approval
-  if (killOn && onlyMachine) return false;
+  if (tier !== "T0") return false; // machine approved a T1 (or errored) PR
+  if (killVar !== "on") return false; // engaged: only the founder at head passes; `_other` never does
   return true;
 }
 
-function reviewsFor(founder: Founder, machine: Machine, other: boolean): Review[] {
+function reviewsFor(
+  founder: Founder,
+  founderAssociation: Association,
+  machine: Machine,
+  other: Other,
+): Review[] {
   const out: Review[] = [];
-  if (founder === "head") out.push(review(FOUNDER, "APPROVED", HEAD));
-  if (founder === "stale") out.push(review(FOUNDER, "APPROVED", OLD));
+  const f = (state: string, sha: string): Review =>
+    review(FOUNDER, state, sha, undefined, founderAssociation);
+  if (founder === "head") out.push(f("APPROVED", HEAD));
+  if (founder === "stale") out.push(f("APPROVED", OLD));
   if (founder === "changes-requested") {
-    out.push(review(FOUNDER, "APPROVED", HEAD));
-    out.push(review(FOUNDER, "CHANGES_REQUESTED", HEAD));
+    out.push(f("APPROVED", HEAD));
+    out.push(f("CHANGES_REQUESTED", HEAD));
   }
   if (machine === "approved") out.push(review(MACHINE_REVIEWER, "APPROVED", HEAD));
   if (machine === "approved-stale") out.push(review(MACHINE_REVIEWER, "APPROVED", OLD));
@@ -85,36 +107,89 @@ function reviewsFor(founder: Founder, machine: Machine, other: boolean): Review[
     out.push(review(MACHINE_REVIEWER, "APPROVED", HEAD));
     out.push(review(MACHINE_REVIEWER, "DISMISSED", HEAD));
   }
-  if (machine === "commented") {
-    out.push(review(MACHINE_REVIEWER, "COMMENTED", HEAD));
-  }
-  if (other) out.push(review("some-maintainer", "APPROVED", HEAD));
+  if (machine === "commented") out.push(review(MACHINE_REVIEWER, "COMMENTED", HEAD));
+  if (other === "collaborator")
+    out.push(review("some-maintainer", "APPROVED", HEAD, undefined, "COLLABORATOR"));
+  if (other === "outsider") out.push(review("drive-by", "APPROVED", HEAD, undefined, "NONE"));
   return out;
 }
 
 describe("decidePr — exhaustive against the design oracle", () => {
   const tiers: PrInput["tier"][] = ["T0", "T1", "error"];
   const founders: Founder[] = ["none", "head", "stale", "changes-requested"];
+  const associations: Association[] = [
+    "OWNER",
+    "MEMBER",
+    "COLLABORATOR",
+    "CONTRIBUTOR",
+    "NONE",
+    null,
+  ];
   const machines: Machine[] = ["none", "approved", "approved-stale", "dismissed", "commented"];
+  const others: Other[] = ["none", "collaborator", "outsider"];
   const kills: (string | undefined)[] = ["on", "off", undefined, "", "On"];
   let cases = 0;
   for (const tier of tiers)
     for (const founder of founders)
-      for (const machine of machines)
-        for (const other of [false, true])
-          for (const kill of kills) {
-            cases++;
-            const want = oracle(tier, founder, machine, other, kill);
-            it(`${tier} founder=${founder} machine=${machine} other=${other} AUTONOMY_T0=${JSON.stringify(kill)} → ${want ? "pass" : "FAIL"}`, () => {
-              expect(decidePr(pr(tier, reviewsFor(founder, machine, other)), kill).pass).toBe(want);
-            });
-          }
+      for (const assoc of associations)
+        for (const machine of machines)
+          for (const other of others)
+            for (const kill of kills) {
+              cases++;
+              const want = oracle(tier, founder, assoc, machine, other, kill);
+              it(`${tier} founder=${founder}/${String(assoc)} machine=${machine} other=${other} AUTONOMY_T0=${JSON.stringify(kill)} → ${want ? "pass" : "FAIL"}`, () => {
+                expect(
+                  decidePr(pr(tier, reviewsFor(founder, assoc, machine, other)), kill).pass,
+                ).toBe(want);
+              });
+            }
   it("enumerated the whole space", () => {
-    expect(cases).toBe(3 * 4 * 5 * 2 * 5);
+    expect(cases).toBe(3 * 4 * 6 * 5 * 3 * 5);
   });
 });
 
 describe("the named design cases", () => {
+  it("an outsider's approval beside the machine's does not lift an engaged kill switch", () => {
+    const v = decidePr(
+      pr("T0", [
+        review(MACHINE_REVIEWER, "APPROVED"),
+        review("drive-by", "APPROVED", HEAD, undefined, "NONE"),
+      ]),
+      "off",
+    );
+    expect(v).toMatchObject({ pass: false, reason: "kill-switch-machine-only" });
+  });
+
+  it("a collaborator's approval beside the machine's does not lift an engaged kill switch either", () => {
+    const v = decidePr(
+      pr("T0", [
+        review(MACHINE_REVIEWER, "APPROVED"),
+        review("some-maintainer", "APPROVED", HEAD, undefined, "COLLABORATOR"),
+      ]),
+      "off",
+    );
+    expect(v).toMatchObject({ pass: false, reason: "kill-switch-machine-only" });
+  });
+
+  it("a founder-login approval without a trusted association does not count", () => {
+    expect([...TRUSTED_ASSOCIATIONS].sort()).toEqual(["COLLABORATOR", "MEMBER", "OWNER"]);
+    const v = decidePr(
+      pr("T1", [
+        review(MACHINE_REVIEWER, "APPROVED"),
+        review(FOUNDER, "APPROVED", HEAD, undefined, "NONE"),
+      ]),
+      "on",
+    );
+    expect(v).toMatchObject({ pass: false, reason: "machine-approved-t1" });
+  });
+
+  it("a machine approval binds whatever its association", () => {
+    expect(
+      decidePr(pr("T1", [review(MACHINE_REVIEWER, "APPROVED", HEAD, undefined, "NONE")]), "on")
+        .pass,
+    ).toBe(false);
+  });
+
   it("FAILS when motebit-reviewer approved a T1 PR", () => {
     const v = decidePr(pr("T1", [review(MACHINE_REVIEWER, "APPROVED")]), "on");
     expect(v).toMatchObject({ pass: false, reason: "machine-approved-t1" });

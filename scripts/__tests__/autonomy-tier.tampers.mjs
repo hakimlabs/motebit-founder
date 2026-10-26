@@ -62,26 +62,70 @@ const TAMPERS = [
     ...dropLine('    "docs/operator/**",'),
     red: T1("an operator doc's image pin (docs/operator/self-host.md)"),
   },
+  // Agent-instruction exclusions (each also holds under docs/).
   {
-    name: "allowlist: apps/docs/content/**/operator/** is not excluded",
-    ...dropLine('    "apps/docs/content/**/operator/**",'),
-    red: T1("an operator docs-site page (apps/docs/content/docs/operator/**)"),
+    name: "allowlist: **/CLAUDE.md is not excluded",
+    ...dropLine('    "**/CLAUDE.md",'),
+    red: T1("docs/CLAUDE.md (agent instructions under docs/)"),
+  },
+  {
+    name: "allowlist: **/AGENTS.md is not excluded",
+    ...dropLine('    "**/AGENTS.md",'),
+    red: T1("docs/AGENTS.md"),
+  },
+  {
+    name: "allowlist: **/.claude/** is not excluded",
+    ...dropLine('    "**/.claude/**",'),
+    red: T1("docs/.claude/agents/reviewer.md"),
+  },
+  {
+    name: "allowlist: **/SKILL.md is not excluded",
+    ...dropLine('    "**/SKILL.md",'),
+    red: T1("docs/guides/SKILL.md (a skill outside .claude/)"),
   },
   // Widening.
   {
-    name: "allowlist widened to **/*.md (agent instructions become T0)",
+    name: "allowlist re-admits apps/docs content (mdx)",
     file: CLASSIFIER,
-    text: '    "docs/**/*.md",\n',
-    replacement: '    "**/*.md",\n',
-    red: T1("a sub-directory CLAUDE.md (agent instructions)"),
+    text: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
+    replacement:
+      '  include: ["docs/**/*.md", "apps/docs/content/**/*.mdx", "scripts/bench/**/*.json"],',
+    red: T1("the docs quickstart's runnable block exfiltrates CI env (check-docs-quickstart-runs)"),
   },
   {
-    name: "allowlist widened to **/*.md (the autonomy design's sibling doctrine root)",
+    name: "allowlist re-admits apps/docs content (md)",
     file: CLASSIFIER,
-    text: '    "docs/**/*.md",\n',
-    replacement: '    "**/*.md",\n',
+    text: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
+    replacement:
+      '  include: ["docs/**/*.md", "apps/docs/content/**/*.md", "scripts/bench/**/*.json"],',
+    red: T1("an apps/docs markdown page (same pipeline as MDX)"),
+  },
+  {
+    name: "allowlist widened to **/*.md (README becomes T0)",
+    file: CLASSIFIER,
+    text: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
+    replacement: '  include: ["**/*.md", "scripts/bench/**/*.json"],',
+    red: T1("README.md"),
+  },
+  {
+    name: "allowlist widened to **/*.md (DOCTRINE.md becomes T0)",
+    file: CLASSIFIER,
+    text: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
+    replacement: '  include: ["**/*.md", "scripts/bench/**/*.json"],',
     red: T1("DOCTRINE.md"),
   },
+  // Case.
+  {
+    name: "case: exclusions match case-sensitively",
+    file: CLASSIFIER,
+    text: 'const EXCLUDE_ANY_CASE = EXCLUDE.map((r) => new RegExp(r.source, "i"));',
+    replacement: "const EXCLUDE_ANY_CASE = EXCLUDE;",
+    red: T1("a lower-case claude.md (exclusions hold whatever the case)"),
+  },
+  off(
+    '        if (collision !== null) fire("case-collision"',
+    T1("docs/Security/dependency-triage.md (case of a tracked directory)"),
+  ),
   // Fail-closed.
   off('      if (f.renamed) fire("rename"', T1("a rename within docs/ (both names allowlisted)")),
   off('      if (f.newPath === null) fire("deletion"', T1("a deleted doc")),
@@ -115,6 +159,23 @@ const TAMPERS = [
     VERDICT_TEST,
   ),
   {
+    name: "verdict: any other approval lifts an engaged kill switch (the public-repo bypass)",
+    file: VERDICT,
+    text: "  if (killSwitchEngaged(autonomyT0)) {",
+    replacement:
+      "  if (killSwitchEngaged(autonomyT0) && !approved.some(([l]) => l !== lower(MACHINE_REVIEWER))) {",
+    red: "the named design cases an outsider's approval beside the machine's does not lift an engaged kill switch",
+    test: VERDICT_TEST,
+  },
+  {
+    name: "verdict: a founder approval counts whatever its author_association",
+    file: VERDICT,
+    text: '      r.commitId === pr.headSha &&\n      TRUSTED_ASSOCIATIONS.has(r.association ?? ""),',
+    replacement: "      r.commitId === pr.headSha,",
+    red: "the named design cases a founder-login approval without a trusted association does not count",
+    test: VERDICT_TEST,
+  },
+  {
     name: "verdict: an unset kill-switch variable leaves autonomy on",
     file: VERDICT,
     text: '  return value !== "on";',
@@ -125,8 +186,8 @@ const TAMPERS = [
   {
     name: "verdict: a stale founder approval carries a later head",
     file: VERDICT,
-    text: "login === lower(FOUNDER) && r.commitId === pr.headSha,",
-    replacement: "login === lower(FOUNDER),",
+    text: "      r.commitId === pr.headSha &&\n      TRUSTED_ASSOCIATIONS",
+    replacement: "      TRUSTED_ASSOCIATIONS",
     red: "the named design cases a STALE founder approval does not carry a machine-approved T1 head",
     test: VERDICT_TEST,
   },

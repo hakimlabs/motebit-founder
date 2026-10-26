@@ -8,17 +8,18 @@
  *
  *   FAIL  the machine reviewer (`motebit-reviewer`) approved and the PR is
  *         not T0 (T1, or the classifier errored — an error is T1);
- *   FAIL  the machine reviewer approved, the kill switch is engaged, and no
- *         other approval stands;
+ *   FAIL  the machine reviewer approved and the kill switch is engaged (only
+ *         a founder approval of the head passes then — the repo is public, so
+ *         any other account's approval is no reason to lift it);
  *   PASS  otherwise — T0, the founder (`hakimlabs`) approved the current head,
  *         or no machine approval stands.
  *
  * A founder approval passes even a T1 PR the machine also approved: the founder
- * reviewed it. A founder approval counts only on the PR's CURRENT head commit,
- * so a stale approval cannot carry later commits (the same holds for the
- * "another approval" that keeps an engaged kill switch from failing a T0 PR);
- * a machine approval counts on
- * ANY commit, so a stale one still binds (fail closed in both directions).
+ * reviewed it. It counts only on the PR's CURRENT head commit (a stale approval
+ * cannot carry later commits) and only with an `author_association` of OWNER,
+ * MEMBER or COLLABORATOR. A machine approval binds on ANY commit and whatever
+ * its association (fail closed in both directions: what could pass a PR is
+ * narrowed, what could fail one never is).
  * A user's standing review state is their latest APPROVED / CHANGES_REQUESTED
  * / DISMISSED review (COMMENTED and PENDING do not change it), as GitHub
  * computes it.
@@ -55,7 +56,16 @@ export interface Review {
   commitId: string | null;
   submittedAt: string | null;
   id: number;
+  /** The reviews API's `author_association` (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...). */
+  association: string | null;
 }
+
+/** Associations whose approval may pass a PR. */
+export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set([
+  "OWNER",
+  "MEMBER",
+  "COLLABORATOR",
+]);
 
 export interface PrInput {
   number: number;
@@ -111,12 +121,11 @@ export function decidePr(pr: PrInput, autonomyT0: string | undefined): PrVerdict
   const approved = [...standing.entries()].filter(([, r]) => r.state === "APPROVED");
   const machine = approved.some(([login]) => login === lower(MACHINE_REVIEWER));
   const founderAtHead = approved.some(
-    ([login, r]) => login === lower(FOUNDER) && r.commitId === pr.headSha,
+    ([login, r]) =>
+      login === lower(FOUNDER) &&
+      r.commitId === pr.headSha &&
+      TRUSTED_ASSOCIATIONS.has(r.association ?? ""),
   );
-  // Another approval of the CURRENT head (a stale one does not lift the kill switch).
-  const others = approved
-    .filter(([login, r]) => login !== lower(MACHINE_REVIEWER) && r.commitId === pr.headSha)
-    .map(([login]) => login);
   const v = (pass: boolean, reason: PrVerdict["reason"], detail: string): PrVerdict => ({
     number: pr.number,
     pass,
@@ -139,11 +148,11 @@ export function decidePr(pr: PrInput, autonomyT0: string | undefined): PrVerdict
       `${MACHINE_REVIEWER} approved a PR that is not T0 (${pr.tier}: ${pr.tierDetail}) — only ${FOUNDER} may approve it`,
     );
   }
-  if (killSwitchEngaged(autonomyT0) && others.length === 0) {
+  if (killSwitchEngaged(autonomyT0)) {
     return v(
       false,
       "kill-switch-machine-only",
-      `AUTONOMY_T0 is ${JSON.stringify(autonomyT0 ?? "")} (not "on") and the only approval is ${MACHINE_REVIEWER}'s`,
+      `AUTONOMY_T0 is ${JSON.stringify(autonomyT0 ?? "")} (not "on"): ${MACHINE_REVIEWER} approved and ${FOUNDER} has not approved the head`,
     );
   }
   return v(true, "t0", `T0 (${pr.tierDetail})`);
@@ -221,6 +230,7 @@ interface ApiReview {
   state: string;
   commit_id: string | null;
   submitted_at: string | null;
+  author_association?: string;
 }
 
 async function fetchReviews(repo: string, n: number, token: string): Promise<Review[]> {
@@ -238,6 +248,7 @@ async function fetchReviews(repo: string, n: number, token: string): Promise<Rev
         state: r.state,
         commitId: r.commit_id,
         submittedAt: r.submitted_at,
+        association: r.author_association ?? null,
       });
     }
     if (batch.length < 100) return out;
