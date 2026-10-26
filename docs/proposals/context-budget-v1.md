@@ -1,4 +1,4 @@
-# Context budget v1 — the end-game shape (design, founder review)
+# Context budget v1 — the end-game shape (accepted 2026-10-25)
 
 **Target invariant:** every turn sends the model as much of the conversation as its real window and its payer's spend policy allow, counted in the model's own tokens, without rewriting the start of the request between turns. What no longer fits is folded into a summary in one step, never shaved off a message at a time.
 
@@ -140,12 +140,14 @@ When a conversation outgrows even the compacted window, older facts return throu
 
 The bench grows to carry the proof: long-context prompts at about 50k and 200k tokens, a cache-read-share metric, and cost per completed turn. It is the same harness that found the defect.
 
-## Decisions for the founder
+## Decisions (founder, 2026-10-25)
 
-1. **The BYOK default cap.** I recommend the model's full window. It's the user's money, the vendor apps do the same, and caching makes re-sent history cheap.
-2. **Cloud per-tier caps**, for example free credit 32k and deposit 200k. These are pricing decisions, so they're yours.
-3. **Watermarks** of 80% and 50%. Standard hysteresis; tunable later from the bench.
-4. **Provider-native compaction.** Adopt it behind the adapter (Increment 5), even though it's beta. The client-side path stays the fallback, so there's no lock-in.
+All four were decided as recommended.
+
+1. **BYOK default cap: the model's full window**, minus the reserves in §2. The user pays, the vendor apps do the same, and caching makes re-sent history cheap. The "maximum context per turn" setting lowers it.
+2. **Cloud per-tier caps: free credit 32k input tokens per request, deposit 200k.** The relay mints them into the proxy token (§5). Changing them is a pricing change.
+3. **Watermarks: compact at 80% of the history budget, down to 50%.** Tunable later from the bench.
+4. **Provider-native compaction: adopt it** behind the adapter (Increment 5), Anthropic first. The client-side path stays the fallback on every provider, so there is no lock-in.
 
 ## Not in scope
 
