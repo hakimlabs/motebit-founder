@@ -42,6 +42,13 @@ import { cleanEnv } from "../lib/differential-tree.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
 const HOOK_SRC = readFileSync(join(ROOT, ".husky/pre-push"), "utf8");
+// The hook re-runs itself under the machine-wide verification lock, so every
+// fixture repo carries the real lock and its wrapper (#1147).
+const LOCK_FILES = [
+  "scripts/with-verify-lock.ts",
+  "scripts/lib/verify-lock.ts",
+  "scripts/lib/differential-tree.ts",
+].map((rel) => [rel, readFileSync(join(ROOT, rel), "utf8")] as const);
 
 /**
  * The shim: logs argv (one line per call) and fails when argv matches
@@ -113,6 +120,7 @@ function repoWith(change: Record<string, string>, opts: RepoOpts = {}): string {
   git(base, "init", "-q", "--bare", "-b", "main", origin);
   git(dir, "init", "-q", "-b", "main");
   write(dir, ".husky/pre-push", opts.hook ?? HOOK_SRC);
+  for (const [rel, content] of LOCK_FILES) write(dir, rel, content);
   write(dir, "package.json", '{ "name": "fixture" }\n');
   write(dir, "pnpm-workspace.yaml", 'packages:\n  - "packages/*"\n  - "apps/*"\n');
   write(dir, "packages/leaf/package.json", '{ "name": "leaf" }\n');
@@ -167,6 +175,7 @@ function runHook(repo: string, env: Record<string, string> = {}): Run {
       v == null ||
       k === "CI" ||
       k.startsWith("MOTEBIT_PREPUSH") ||
+      k.startsWith("MOTEBIT_VERIFY_LOCK") ||
       k === "SKIP_COVERAGE" ||
       k.startsWith("GIT_")
     ) {
@@ -181,6 +190,8 @@ function runHook(repo: string, env: Record<string, string> = {}): Run {
       ...childEnv,
       PATH: `${shimDir}:${process.env.PATH ?? ""}`,
       SHIM_LOG: log,
+      // Each run's own lock file: the fixture runs never wait on a real push.
+      MOTEBIT_VERIFY_LOCK_FILE: join(repo, "..", `${repo.split("/").pop()}-verify.lock`),
       ...env,
     },
   });
@@ -236,6 +247,39 @@ describe("pre-push hook — pushed from a LINKED worktree (#835, 2026-10-02)", (
     ]);
     const seen = readFileSync(envLog, "utf8").split("\n").filter(Boolean);
     expect(seen).toEqual(r.calls.map(() => "GIT:"));
+  });
+});
+
+describe("pre-push hook — one verification run per machine (#1147)", () => {
+  it("runs under the machine-wide lock: while another run holds it, no phase starts", () => {
+    const repo = repoWith(LEAF_CHANGE);
+    const lockFile = join(repo, "..", "held-verify.lock");
+    // A live holder (this test process) and a short wait: the hook must give
+    // up waiting before running a single phase.
+    writeFileSync(
+      lockFile,
+      JSON.stringify({ pid: process.pid, holder: "another push", startedAt: "now" }),
+    );
+    const r = runHook(repo, {
+      MOTEBIT_VERIFY_LOCK_FILE: lockFile,
+      MOTEBIT_VERIFY_LOCK_TIMEOUT_MS: "500",
+    });
+    expect(r.status).toBe(75);
+    expect(r.stderr).toMatch(
+      /waiting for the machine's verification lock — held by `another push`/,
+    );
+    expect(r.calls).toEqual([]);
+  });
+
+  it("releases the lock when the run ends, so the next push starts at once", () => {
+    const repo = repoWith(LEAF_CHANGE);
+    const lockFile = join(repo, "..", "shared-verify.lock");
+    const first = runHook(repo, { MOTEBIT_VERIFY_LOCK_FILE: lockFile });
+    expect(first.status, first.stderr).toBe(0);
+    expect(existsSync(lockFile)).toBe(false);
+    const second = runHook(repo, { MOTEBIT_VERIFY_LOCK_FILE: lockFile });
+    expect(second.status, second.stderr).toBe(0);
+    expect(second.stderr).not.toMatch(/waiting/);
   });
 });
 
