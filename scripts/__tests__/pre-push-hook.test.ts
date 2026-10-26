@@ -44,9 +44,11 @@ const ROOT = resolve(__dirname, "..", "..");
 const HOOK_SRC = readFileSync(join(ROOT, ".husky/pre-push"), "utf8");
 // The hook re-runs itself under the machine-wide verification lock, so every
 // fixture repo carries the real lock and its wrapper (#1147).
-const LOCK_FILES = ["scripts/with-verify-lock.ts", "scripts/lib/verify-lock.ts"].map(
-  (rel) => [rel, readFileSync(join(ROOT, rel), "utf8")] as const,
-);
+const LOCK_FILES = [
+  "scripts/with-verify-lock.ts",
+  "scripts/lib/verify-lock.ts",
+  "scripts/lib/differential-tree.ts",
+].map((rel) => [rel, readFileSync(join(ROOT, rel), "utf8")] as const);
 
 /**
  * The shim: logs argv (one line per call) and fails when argv matches

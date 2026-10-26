@@ -14,6 +14,7 @@
 
 import { spawn } from "node:child_process";
 
+import { cleanEnv } from "./lib/differential-tree.js";
 import { acquireVerifyLock } from "./lib/verify-lock.js";
 
 async function main(): Promise<void> {
@@ -34,7 +35,9 @@ async function main(): Promise<void> {
     process.exit(75);
   }
 
-  const child = spawn(cmd!, args, { stdio: "inherit", env: process.env });
+  // No inherited GIT_* reaches the command (#835): the pre-push hook scrubs
+  // before it re-runs itself here, and this spawn scrubs again for any caller.
+  const child = spawn(cmd!, args, { stdio: "inherit", env: cleanEnv(process.env) });
   const forward = (sig: NodeJS.Signals) => () => child.kill(sig);
   process.on("SIGINT", forward("SIGINT"));
   process.on("SIGTERM", forward("SIGTERM"));
