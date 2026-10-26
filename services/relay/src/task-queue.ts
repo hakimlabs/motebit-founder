@@ -16,7 +16,6 @@ import { AgentTaskStatus, asMotebitId } from "@motebit/sdk";
 /* eslint-disable-next-line no-restricted-imports -- the answer archive stores canonical bytes */
 import { canonicalJson } from "@motebit/encryption";
 import type { TaskQueueEntry } from "./tasks.js";
-import { claimHoldFloor } from "./freeze.js";
 
 // ---------------------------------------------------------------------------
 // The answer capability (#890 round 9)
@@ -34,11 +33,35 @@ import { claimHoldFloor } from "./freeze.js";
 // or INSERT OR REPLACE cannot write an answer either (unless it forges the
 // version: the triggers are the second layer, the capability the first).
 
+/** A queue row (`relay_task_queue`) whose answer is claimed and not settled. */
+export const UNSETTLED_CLAIM_IN_QUEUE = `(json_extract(task_json, '$.settling') IS NOT NULL
+        AND COALESCE(json_extract(task_json, '$.settled'), 0) = 0)`;
+/** An archived answer (`relay_task_answers`) that is claimed and not settled. */
+export const UNSETTLED_CLAIM_IN_ARCHIVE = `(settling IS NOT NULL AND settled = 0)`;
+
 /**
- * How long past its expiry a claimed-but-unsettled entry is held for the
- * settlement-recovery sweep (#890 round 10) — the answers' retention.
+ * Whether `taskId` holds a claimed-but-unsettled answer (`settling` set,
+ * `settled` not) in EITHER store a replay reads: the queue entry or the
+ * answer archive (`relay_task_answers`). The kept-claim law (#1152 M3): such
+ * a claim is money still owed a decision, so its queue entry, its archived
+ * answer and its route are kept with no time limit (`cleanup`, `evict`,
+ * `cleanupTaskRoutes`), and no stale sweep returns its escrow to the
+ * delegator over the valid receipt. Read from the
+ * stores, never only the queue: an entry an earlier build evicted leaves its
+ * claim in the archive.
  */
-export const UNSETTLED_CLAIM_HOLD_MS = 7 * 24 * 60 * 60 * 1000;
+export function holdsUnsettledClaim(db: DatabaseDriver, taskId: string): boolean {
+  return (
+    db
+      .prepare(
+        `SELECT 1 FROM relay_task_queue WHERE task_id = ? AND ${UNSETTLED_CLAIM_IN_QUEUE}
+         UNION ALL
+         SELECT 1 FROM relay_task_answers WHERE task_id = ? AND ${UNSETTLED_CLAIM_IN_ARCHIVE}
+         LIMIT 1`,
+      )
+      .get(taskId, taskId) !== undefined
+  );
+}
 
 /** The opaque capability `writeAnswer` demands. */
 export type AnswerCapability = { readonly __brand: "AnswerCapability" };
@@ -143,12 +166,11 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     this.stmtAll = db.prepare("SELECT * FROM relay_task_queue");
     // An entry whose answer is claimed but not settled (#890 round 10) is
     // money still owed a decision: expiry and the size cap leave it for the
-    // settlement-recovery sweep — for at most UNSETTLED_CLAIM_HOLD_MS past
-    // its expiry (never while frozen, and not for that long after an
-    // unfreeze: `claimHoldFloor`), after which it goes like any other.
-    const heldClaim = `(json_extract(task_json, '$.settling') IS NOT NULL
-        AND COALESCE(json_extract(task_json, '$.settled'), 0) = 0
-        AND expires_at >= ?)`;
+    // settlement-recovery sweep with NO time limit (#1152 M3, the kept-claim
+    // law — `holdsUnsettledClaim`). A floor on `expires_at` let a claim go
+    // seven days after its expiry; recovery could then never settle it and
+    // the stale sweep refunded the delegator over the valid receipt.
+    const heldClaim = UNSETTLED_CLAIM_IN_QUEUE;
     // A GRANTED, unanswered entry (one task, one body — task-claim.ts) is
     // never deleted or evicted: its executor may have run it, so it stays —
     // undetermined, with its allocation hold — until the executor's signed
@@ -353,6 +375,12 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
           Date.now(),
         );
       }
+      // A settled claim is no longer the kept-claim law's to hold (#1152 M3):
+      // its allocation's markers are cleared in this same write, so a
+      // `claim_unrecoverable_at` never outlives the claim it named and keeps
+      // a later refund (a forward that settled the claim, then exhausted)
+      // from proceeding.
+      if (current.settled === true) this.clearClaimMarkers(taskId);
       this.db.exec("RELEASE write_answer");
     } catch (err) {
       this.db.exec("ROLLBACK TO write_answer");
@@ -360,6 +388,35 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       throw err;
     }
     return current;
+  }
+
+  /** Whether `relay_allocations` carries the v60 claim markers (a bare queue has none). */
+  private claimMarkerColumns: boolean | undefined;
+
+  /**
+   * Clear `taskId`'s allocation claim markers (the claim settled). The audit
+   * trail stays: `claim_unrecoverable_evidence` is kept and
+   * `claim_unrecoverable_cleared_at` records when the claim later settled.
+   */
+  private clearClaimMarkers(taskId: string): void {
+    if (this.claimMarkerColumns === undefined) {
+      const cols = this.db.prepare("PRAGMA table_info(relay_allocations)").all() as Array<{
+        name: string;
+      }>;
+      this.claimMarkerColumns = cols.some((c) => c.name === "claim_unrecoverable_at");
+    }
+    if (!this.claimMarkerColumns) return;
+    this.db
+      .prepare(
+        `UPDATE relay_allocations
+            SET claim_unrecoverable_cleared_at = CASE WHEN claim_unrecoverable_at IS NOT NULL
+                  THEN ? ELSE claim_unrecoverable_cleared_at END,
+                claim_unrecoverable_at = NULL,
+                settlement_blocked_at = NULL, settlement_replay_failures = 0
+          WHERE task_id = ? AND (claim_unrecoverable_at IS NOT NULL
+            OR settlement_blocked_at IS NOT NULL OR settlement_replay_failures <> 0)`,
+      )
+      .run(Date.now(), taskId);
   }
 
   /** UPDATE the row at `expectedVersion` to `version`; false when it moved on. */
@@ -473,11 +530,10 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
 
   /**
    * Delete expired tasks. Returns number of deleted rows. A claimed-but-
-   * unsettled entry's hold never runs out while the relay is frozen (the
-   * freeze is what keeps it unsettled) — `claimHoldFloor`.
+   * unsettled entry is never deleted (the kept-claim law, #1152 M3).
    */
   cleanup(now: number = Date.now()): number {
-    const result = this.stmtCleanup.run(now, claimHoldFloor(this.db, now, UNSETTLED_CLAIM_HOLD_MS));
+    const result = this.stmtCleanup.run(now);
     return result.changes;
   }
 
@@ -497,10 +553,8 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     const currentSize = this.size;
     if (currentSize <= maxSize) return 0;
     const toEvict = currentSize - maxSize;
-    const result = this.stmtEvictOldest.run(
-      claimHoldFloor(this.db, Date.now(), UNSETTLED_CLAIM_HOLD_MS),
-      toEvict,
-    );
+    // A claimed-but-unsettled entry is never evicted (#1152 M3).
+    const result = this.stmtEvictOldest.run(toEvict);
     return result.changes;
   }
 

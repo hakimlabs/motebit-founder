@@ -729,7 +729,7 @@ describe("#890 r9 the tables refuse what the claim refuses", () => {
 });
 
 describe("#890 r9 pinned hunks", () => {
-  it("the answers sweep deletes an expired answer and keeps an unsettled claim of a still-queued task", async () => {
+  it("the answers sweep deletes an expired answer and keeps every unsettled claim (#1152 M3: queued or not)", async () => {
     const w = await world();
     try {
       const db = w.relay.moteDb.db;
@@ -738,21 +738,25 @@ describe("#890 r9 pinned hunks", () => {
       mcpReplies.set(prompt, async () => null);
       const queued = await admit(w, prompt);
       const gone = crypto.randomUUID();
+      const goneUnclaimed = crypto.randomUUID();
       const settledQueued = crypto.randomUUID();
       const row = db.prepare(
         `INSERT INTO relay_task_answers (task_id, executor_id, status, receipt_json, settling, settled, answer_version, answered_at)
-         VALUES (?, 'w', 'completed', '{}', 'sig', ?, 1, ?)`,
+         VALUES (?, 'w', 'completed', '{}', ?, ?, 1, ?)`,
       );
-      row.run(queued, 0, old); // unsettled, task still queued: kept
-      row.run(gone, 0, old); // the task left the queue: swept
-      row.run(settledQueued, 1, old); // settled: swept
+      row.run(queued, "sig", 0, old); // claimed, unsettled, task still queued: kept
+      row.run(gone, "sig", 0, old); // claimed, unsettled, the task left the queue: kept (the kept-claim law)
+      row.run(goneUnclaimed, null, 0, old); // unclaimed, the task left the queue: swept
+      row.run(settledQueued, "sig", 1, old); // settled: swept
       cleanupTaskRoutes(db, Date.now());
       const left = (
         db
-          .prepare("SELECT task_id FROM relay_task_answers WHERE task_id IN (?, ?, ?)")
-          .all(queued, gone, settledQueued) as Array<{ task_id: string }>
-      ).map((r) => r.task_id);
-      expect(left).toEqual([queued]);
+          .prepare("SELECT task_id FROM relay_task_answers WHERE task_id IN (?, ?, ?, ?)")
+          .all(queued, gone, goneUnclaimed, settledQueued) as Array<{ task_id: string }>
+      )
+        .map((r) => r.task_id)
+        .sort();
+      expect(left).toEqual([queued, gone].sort());
     } finally {
       await w.relay.close();
     }

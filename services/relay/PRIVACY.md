@@ -61,6 +61,7 @@ Observable:
 - every operator agent de-listing and reinstatement — the signed, append-only `AgentRevocationRecord` history (motebit_id, reason, actor, note, effective_at) served publicly at GET /api/v1/agents/revocations and verifiable against the relay's pinned key; a de-list removes an agent from Discover only — its identity, key, succession chain, and receipts stay served
 - every identity revocation (POST /api/v1/agents/:motebitId/revoke) — motebit_id, the time it was recorded, and the key the revoking token verified under (or `operator`); kept for every identity the relay authenticates, registered or not, until the identity proves its key by migrating in or the operator reinstates the listing (#787)
 - every dispute, evidence submission, and resolution
+- for an allocation whose claimed settlement could not be written: the consecutive settlement-recovery replay failures and when they reached 12 (shown to the operator; it moves no money), and when the operator recorded the claim unrecoverable with the evidence text the operator gave (the escrow stays held) and, if the claim later settled, when — the evidence is kept as the audit trail — migration v60
 - every federation peer relationship
 - every onchain settlement proof attached
 - every treasury-reconciliation cycle on mainnet — the recorded x402 platform-fee sum, the onchain USDC balance at the operator's fee-collection address, the drift between them, and the consistent flag — append-only audit log
@@ -110,7 +111,7 @@ Observable:
 - for every answered task: its answer — the executor's signed receipt (its motebit_id, status, result hash, and the result text the executor signed), the receipt its settlement is claimed for, and when — so the task's poll answers the same after the queue forgets it (#890 round 9)
 - for every task a peer forwarded here and this relay's agent answered: that its answer is owed to the origin relay — the task id, the origin relay id, the delivery attempts, the last error, and when it was delivered — so the result is retried until the origin acknowledges it (#890 round 10, migration v53); the answer itself is the archived one above
 
-Retention window: 7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer; an answer whose settlement is claimed but not yet written is kept while its task is still queued (a queued task with such an answer is held up to 7 days past its expiry), so the next retry or the settlement-recovery sweep settles it; an owed result is kept while it is still owed, and 7 days from its first attempt once delivered, refused or out of attempts.
+Retention window: 7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer; an answer whose settlement is claimed but not yet written is kept, with its route and its queued task, with no time limit until that settlement is written, so the next retry or the settlement-recovery sweep can settle it; an owed result is kept while it is still owed, and 7 days from its first attempt once delivered, refused or out of attempts.
 
 ### Machine roster
 

@@ -45,6 +45,7 @@ import type { TaskQueueEntry } from "./tasks.js";
 import type { AnswerQueue } from "./task-answer.js";
 import { claimStoredAnswer } from "./task-answer.js";
 import { createLogger } from "./logger.js";
+import { noteClaimReplay } from "./claim-settlement.js";
 
 const logger = createLogger({ service: "relay", module: "settlement-recovery" });
 
@@ -156,27 +157,10 @@ export async function recoverSettlements(
     .all(now - graceMs) as Array<{ task_id: string }>;
   for (const { task_id } of candidates) {
     if (halt()) return report;
-    const entry = taskQueue.get(task_id);
-    if (entry == null || !claimedUnsettled(entry)) continue;
+    const outcome = await replayClaim(deps, task_id);
+    if (outcome === "not_claimed") continue;
     report.replayed.push(task_id);
-    try {
-      await replay(deps, task_id, entry);
-    } catch (err) {
-      // A door's refusal of its own claimed answer (an HTTP error from the
-      // federation door) — logged; the claim stays for the next pass.
-      logger.warn("settlement.recovery_replay_failed", {
-        correlationId: task_id,
-        door: entry.settle_via?.kind ?? "result_post",
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    if (taskQueue.get(task_id)?.settled === true) report.settled.push(task_id);
-    else {
-      logger.error("settlement.recovery_unsettled", {
-        correlationId: task_id,
-        door: entry.settle_via?.kind ?? "result_post",
-      });
-    }
+    if (outcome === "settled") report.settled.push(task_id);
   }
 
   // 3. Deliver the executor relay's owed federation results.
@@ -201,6 +185,43 @@ export async function recoverSettlements(
     });
   }
   return report;
+}
+
+/**
+ * Replay ONE claimed-but-unsettled answer through the door its claim was
+ * taken by: the recovery pass's step, and the operator door's `re-attempt`
+ * (`claim-settlement.ts`). The same receipt through the same door, never
+ * another payee and never a refund. Every replay's outcome is counted on the
+ * task's allocation (`noteClaimReplay`: 12 consecutive failures set the
+ * visibility-only `settlement_blocked_at`); a replay the freeze refused is
+ * not counted. `not_claimed` when the entry holds no such claim.
+ */
+export async function replayClaim(
+  deps: SettlementRecoveryDeps,
+  taskId: string,
+): Promise<"not_claimed" | "settled" | "unsettled"> {
+  const entry = deps.taskQueue.get(taskId);
+  if (entry == null || !claimedUnsettled(entry)) return "not_claimed";
+  try {
+    await replay(deps, taskId, entry);
+  } catch (err) {
+    // A door's refusal of its own claimed answer (an HTTP error from the
+    // federation door): logged; the claim stays for the next pass.
+    logger.warn("settlement.recovery_replay_failed", {
+      correlationId: taskId,
+      door: entry.settle_via?.kind ?? "result_post",
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  const settled = deps.taskQueue.get(taskId)?.settled === true;
+  if (!settled) {
+    logger.error("settlement.recovery_unsettled", {
+      correlationId: taskId,
+      door: entry.settle_via?.kind ?? "result_post",
+    });
+  }
+  if (settled || deps.isFrozen?.() !== true) noteClaimReplay(deps.db, taskId, settled);
+  return settled ? "settled" : "unsettled";
 }
 
 /** Replay `entry`'s own answer through the door its claim was taken by. */
