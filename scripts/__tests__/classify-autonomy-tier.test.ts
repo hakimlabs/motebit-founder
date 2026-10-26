@@ -276,6 +276,24 @@ export const MUST_T1: Fixture[] = [
     diff: modify("docs/drift-defenses.md", ["old"], ["new"]),
     expect: ["not-allowlisted"],
   },
+  {
+    name: "an operator doc's image pin (docs/operator/self-host.md)",
+    diff: modify(
+      "docs/operator/self-host.md",
+      ["    image: ghcr.io/motebit/relay:1.2.0"],
+      ["    image: ghcr.io/motebit/relay:1.0.0"],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "an operator docs-site page (apps/docs/content/docs/operator/**)",
+    diff: modify(
+      "apps/docs/content/docs/operator/governance.mdx",
+      ["Set `MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=true`."],
+      ["Signature checks are optional."],
+    ),
+    expect: ["not-allowlisted"],
+  },
   // Outside the allowlist.
   {
     name: "a changeset (drives release versions)",
@@ -610,6 +628,8 @@ describe("the rule table and the allowlist", () => {
         "docs/ops/**",
         "docs/design/**",
         "docs/drift-defenses.md",
+        "docs/operator/**",
+        "apps/docs/content/**/operator/**",
       ],
     });
   });
@@ -628,6 +648,8 @@ describe("the rule table and the allowlist", () => {
       "docs/ops/a.md",
       "docs/design/a.md",
       "docs/drift-defenses.md",
+      "docs/operator/self-host.md",
+      "apps/docs/content/docs/operator/architecture.mdx",
       "docs/a.mdx",
       "docs/operator/docker-compose.example.yml",
       "apps/docs/content/docs/meta.json",

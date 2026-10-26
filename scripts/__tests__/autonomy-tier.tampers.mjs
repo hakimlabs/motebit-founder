@@ -57,6 +57,16 @@ const TAMPERS = [
     ...dropLine('    "docs/drift-defenses.md",'),
     red: T1("the drift-defense inventory (docs/drift-defenses.md)"),
   },
+  {
+    name: "allowlist: docs/operator/** is not excluded",
+    ...dropLine('    "docs/operator/**",'),
+    red: T1("an operator doc's image pin (docs/operator/self-host.md)"),
+  },
+  {
+    name: "allowlist: apps/docs/content/**/operator/** is not excluded",
+    ...dropLine('    "apps/docs/content/**/operator/**",'),
+    red: T1("an operator docs-site page (apps/docs/content/docs/operator/**)"),
+  },
   // Widening.
   {
     name: "allowlist widened to **/*.md (agent instructions become T0)",

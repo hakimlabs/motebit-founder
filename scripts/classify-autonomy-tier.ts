@@ -55,13 +55,20 @@ export const ALLOWLIST = {
     "apps/docs/content/**/*.mdx",
     "scripts/bench/**/*.json",
   ],
-  /** Inside an include, still T1: agent-facing doctrine, the autonomy design itself, runbooks, designs, the drift inventory. */
+  /**
+   * Inside an include, still T1: agent-facing doctrine, the autonomy design
+   * itself, runbooks, designs, the drift inventory, and operator-facing docs
+   * (they carry deploy pins — e.g. the relay image in docs/operator/self-host.md —
+   * and security posture).
+   */
   exclude: [
     "docs/doctrine/**",
     "docs/proposals/**",
     "docs/ops/**",
     "docs/design/**",
     "docs/drift-defenses.md",
+    "docs/operator/**",
+    "apps/docs/content/**/operator/**",
   ],
 } as const;
 
