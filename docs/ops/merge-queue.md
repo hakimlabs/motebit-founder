@@ -35,6 +35,13 @@ The non-required `changes` job uses the same `base_sha` diff, so
 `gate-effectiveness` / `activation-effectiveness` fire on a queued group exactly
 when they would on the PR (they run unconditionally on the push to `main`).
 
+`desktop-rust` (the macOS compile, test and `tauri build` of
+`apps/desktop/src-tauri`, #1149) decides its own scope from the same
+`base_sha` diff, and from the push's `before` on `main`. It always reports:
+out of scope it succeeds with its build steps skipped, and a diff it cannot
+compute builds rather than skips. It is not in the required list above; it can
+be added to it without stalling the queue.
+
 ### The CLA choice
 
 A blind pass on `merge_group` would let an unsigned contributor's commit enter
