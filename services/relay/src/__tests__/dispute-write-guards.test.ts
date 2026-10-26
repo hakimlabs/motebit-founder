@@ -469,3 +469,61 @@ describe("the deferred worker's round 2 commits through commitRound2Verdict", ()
     });
   });
 });
+
+describe("the GET expiry writer commits only from opened", () => {
+  /**
+   * The GET handler reads `opened`, then writes `expired` in the same turn.
+   * Another process can move the row between that read and the write; the
+   * test stands in for it by moving the row just before the expiry UPDATE
+   * is prepared.
+   */
+  function moveBeforeExpiryWrite(id: string, to: string): () => void {
+    const d = db();
+    const original = d.prepare.bind(d);
+    let armed = true;
+    d.prepare = ((sql: string) => {
+      if (armed && sql.includes("SET state = 'expired'")) {
+        armed = false;
+        original("UPDATE relay_disputes SET state = ? WHERE dispute_id = ?").run(to, id);
+      }
+      return original(sql);
+    }) as typeof d.prepare;
+    return () => {
+      d.prepare = original;
+    };
+  }
+
+  function openedPastItsWindow(): string {
+    const id = insertDispute("opened");
+    db()
+      .prepare("UPDATE relay_disputes SET filed_at = ? WHERE dispute_id = ?")
+      .run(Date.now() - 2 * 3600_000, id);
+    return id;
+  }
+
+  it("an opened dispute past its window that another process moved to evidence is not expired, and GET reports evidence", async () => {
+    relay = await createTestRelay();
+    const id = openedPastItsWindow();
+    const restore = moveBeforeExpiryWrite(id, "evidence");
+    try {
+      const res = await relay.app.request(`/api/v1/disputes/${id}`, { headers: AUTH_HEADER });
+      expect(res.status, await res.clone().text()).toBe(200);
+      expect(((await res.json()) as { state: string }).state).toBe("evidence");
+    } finally {
+      restore();
+    }
+    expect(disputeRow(id).state).toBe("evidence");
+    expect(
+      db().prepare("SELECT expired_at FROM relay_disputes WHERE dispute_id = ?").get(id),
+    ).toEqual({ expired_at: null });
+  });
+
+  it("happy path unchanged: an opened dispute past its window expires on GET", async () => {
+    relay = await createTestRelay();
+    const id = openedPastItsWindow();
+    const res = await relay.app.request(`/api/v1/disputes/${id}`, { headers: AUTH_HEADER });
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(((await res.json()) as { state: string }).state).toBe("expired");
+    expect(disputeRow(id).state).toBe("expired");
+  });
+});

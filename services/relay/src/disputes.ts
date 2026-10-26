@@ -2336,11 +2336,19 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       dispute.state === "opened" &&
       Date.now() > (dispute.filed_at as number) + OPENED_EXPIRE_MS
     ) {
-      db.prepare(
-        "UPDATE relay_disputes SET state = 'expired', expired_at = ? WHERE dispute_id = ?",
-      ).run(Date.now(), disputeId);
-      dispute.state = "expired";
-      dispute.expired_at = Date.now();
+      // Guarded on state like every other dispute-state writer: the read
+      // above may be stale against another process, and an expiry must
+      // never overwrite a dispute that left `opened` (M6, "Who may write
+      // dispute state"). A lost race reads the state that stands.
+      const expired = db
+        .prepare(
+          "UPDATE relay_disputes SET state = 'expired', expired_at = ? WHERE dispute_id = ? AND state = 'opened'",
+        )
+        .run(Date.now(), disputeId);
+      dispute = getDispute(db, disputeId) ?? dispute;
+      if (expired.changes === 0) {
+        logger.info("dispute.expire.not_committed", { disputeId, state: dispute.state });
+      }
     }
 
     // Lazy-on-read finalize: §3.3 + §7.1 + §7.3 — if state=resolved AND

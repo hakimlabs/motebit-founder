@@ -16,7 +16,9 @@
  *   - `/resolve`'s `persisted` check removed — single-relay and synchronous
  *     federation both answer 200 on a verdict they did not commit;
  *   - the worker's round-2 re-point removed — a due round-2 row goes through
- *     the round-1 writer and the appeal's fund action never runs.
+ *     the round-1 writer and the appeal's fund action never runs;
+ *   - the GET expiry writer's `opened` guard removed — a dispute another
+ *     process moved to `evidence` is expired anyway.
  *
  * Exit 1 if any tamper stays green or cannot apply.
  *
@@ -54,6 +56,7 @@ const only = (red) => ({
 const FINALIZE = "finalizeFederationResolution: round 1 commits only from evidence or arbitration";
 const RESOLVE = "/resolve answers 409 with the standing record when its verdict did not commit";
 const WORKER = "the deferred worker's round 2 commits through commitRound2Verdict";
+const EXPIRE = "the GET expiry writer commits only from opened";
 
 const STATE_GUARD = {
   file: ORCH,
@@ -140,6 +143,19 @@ const TAMPERS = [
     ],
     ...only(
       `${WORKER} a due round-2 row finalizes the appeal AND executes its fund action in the same commit`,
+    ),
+  },
+  {
+    name: "the GET expiry writer's opened guard removed",
+    edits: [
+      {
+        file: DISPUTES,
+        from: "SET state = 'expired', expired_at = ? WHERE dispute_id = ? AND state = 'opened'\",",
+        to: "SET state = 'expired', expired_at = ? WHERE dispute_id = ?\",",
+      },
+    ],
+    ...only(
+      `${EXPIRE} an opened dispute past its window that another process moved to evidence is not expired, and GET reports evidence`,
     ),
   },
 ];
