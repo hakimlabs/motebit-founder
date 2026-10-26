@@ -964,6 +964,11 @@ describe("attemptOrFinalizeFederationResolution — §6.2 deferred orchestrator"
 
     const dispute = env.filePeerlessDispute("d-worker", "worker");
     const startTime = 1_700_000_000_000;
+    // The worker runs on a fixed clock; close the evidence window on it
+    // (spec §5.4: no round-1 verdict before evidence_deadline).
+    env.db
+      .prepare("UPDATE relay_disputes SET evidence_deadline = ? WHERE dispute_id = ?")
+      .run(startTime, dispute.dispute_id);
     const { attemptOrFinalizeFederationResolution, runDeferredOrchestrationCycle } =
       await import("../disputes.js");
 
@@ -1026,6 +1031,11 @@ describe("attemptOrFinalizeFederationResolution — §6.2 deferred orchestrator"
     // process. Worker should pick it up on the next cycle.
     const dispute = env.filePeerlessDispute("d-restart", "worker");
     const startTime = 1_700_000_000_000;
+    // The worker runs on a fixed clock; close the evidence window on it
+    // (spec §5.4: no round-1 verdict before evidence_deadline).
+    env.db
+      .prepare("UPDATE relay_disputes SET evidence_deadline = ? WHERE dispute_id = ?")
+      .run(startTime, dispute.dispute_id);
     env.db
       .prepare(
         `INSERT INTO relay_dispute_orchestrations
@@ -1050,5 +1060,71 @@ describe("attemptOrFinalizeFederationResolution — §6.2 deferred orchestrator"
     });
     expect(result.processed).toBe(1);
     expect(result.ready).toBe(1);
+  });
+
+  it("an orchestration row opened before the evidence deadline is not finalized until it passes (§5.4)", async () => {
+    env = await setupOrchEnv(3);
+    const policies = new Map(
+      env.peers.map((p) => [p.identity.relayMotebitId, { vote: "upheld" as DisputeOutcome }]),
+    );
+    let voteRequests = 0;
+    const inner = makeFetchImpl(env.peers, policies);
+    const fetchImpl = (async (...args: Parameters<typeof fetch>) => {
+      voteRequests++;
+      return inner(...args);
+    }) as typeof fetch;
+
+    // A row a pre-gate /resolve left behind: due, with the window still open.
+    const dispute = env.filePeerlessDispute("d-early", "worker");
+    const startTime = 1_700_000_000_000;
+    const deadline = startTime + 24 * 60 * 60 * 1000;
+    env.db
+      .prepare("UPDATE relay_disputes SET evidence_deadline = ? WHERE dispute_id = ?")
+      .run(deadline, dispute.dispute_id);
+    env.db
+      .prepare(
+        `INSERT INTO relay_dispute_orchestrations
+           (dispute_id, round, status, started_at, last_attempt_at, next_attempt_at,
+            attempt_count, deadline_at)
+         VALUES (?, 1, 'in_progress', ?, ?, ?, 1, ?)`,
+      )
+      .run(
+        dispute.dispute_id,
+        startTime,
+        startTime,
+        startTime + 1000,
+        startTime + 72 * 60 * 60 * 1000,
+      );
+
+    const { runDeferredOrchestrationCycle } = await import("../disputes.js");
+    const before = await runDeferredOrchestrationCycle({
+      db: env.db,
+      relayIdentity: env.leader,
+      fetchImpl,
+      nowMs: () => deadline - 1,
+    });
+    expect(before.ready).toBe(0);
+    expect(voteRequests).toBe(0);
+    const stateBefore = env.db
+      .prepare("SELECT state FROM relay_disputes WHERE dispute_id = ?")
+      .get(dispute.dispute_id) as { state: string };
+    expect(stateBefore.state).not.toBe("resolved");
+    expect(
+      env.db
+        .prepare("SELECT COUNT(*) AS n FROM relay_dispute_resolutions WHERE dispute_id = ?")
+        .get(dispute.dispute_id),
+    ).toEqual({ n: 0 });
+    const row = env.db
+      .prepare("SELECT status FROM relay_dispute_orchestrations WHERE dispute_id = ? AND round = 1")
+      .get(dispute.dispute_id) as { status: string };
+    expect(row.status).toBe("in_progress");
+
+    const after = await runDeferredOrchestrationCycle({
+      db: env.db,
+      relayIdentity: env.leader,
+      fetchImpl,
+      nowMs: () => deadline,
+    });
+    expect(after.ready).toBe(1);
   });
 });

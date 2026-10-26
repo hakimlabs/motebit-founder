@@ -1221,9 +1221,17 @@ export async function runDeferredOrchestrationCycle(deps: {
 
   for (const item of due) {
     const dispute = db
-      .prepare("SELECT dispute_id, body_json, filer_role FROM relay_disputes WHERE dispute_id = ?")
+      .prepare(
+        "SELECT dispute_id, body_json, filer_role, evidence_deadline FROM relay_disputes WHERE dispute_id = ?",
+      )
       .get(item.dispute_id) as
-      { dispute_id: string; body_json: string; filer_role: string | null } | undefined;
+      | {
+          dispute_id: string;
+          body_json: string;
+          filer_role: string | null;
+          evidence_deadline: number;
+        }
+      | undefined;
     if (!dispute) {
       // Dispute row pruned (retention); the orphan orchestration row
       // would block forever otherwise. Mark it timed_out so it stops
@@ -1231,6 +1239,15 @@ export async function runDeferredOrchestrationCycle(deps: {
       logger.warn("dispute.orchestration.orphan_dispute_row", { disputeId: item.dispute_id });
       markOrchestrationTimedOut(db, item.dispute_id, item.round);
       timedOut++;
+      continue;
+    }
+    // §5.4: no round-1 verdict before the evidence window closes, whichever
+    // door reaches it. `/resolve` refuses first; this covers an orchestration
+    // row that already exists (one opened by a `/resolve` before that gate).
+    // The row stays in_progress and is picked up again once the window has
+    // closed; no vote request goes out with a partial evidence bundle.
+    if (item.round === 1 && now < dispute.evidence_deadline) {
+      deferred++;
       continue;
     }
     try {
@@ -1897,6 +1914,31 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       throw new HTTPException(400, {
         message: `Cannot resolve in state: ${String(dispute.state)}`,
       });
+    }
+
+    // §5.3 / §6.5: the evidence window is a guarantee, not a suggestion. A
+    // round-1 verdict before `evidence_deadline` (the relay's receive time +
+    // 48 h, §4.4) would decide before the other side's evidence is in — and
+    // on the federation path the relay deciding to fan out may itself be a
+    // party. Refused before any write: no state transition, no orchestration
+    // row, no resolution, no money. Round 2 (the `appealed` branch above) has
+    // no evidence deadline of its own — the bundle freezes at `appealed`
+    // (§8.3) — so it is not gated here.
+    const evidenceDeadline = dispute.evidence_deadline as number;
+    if (Date.now() < evidenceDeadline) {
+      logger.warn("dispute.resolve_refused.evidence_window_open", {
+        disputeId,
+        evidenceDeadline,
+      });
+      return c.json(
+        {
+          error: `The evidence window is open until ${new Date(evidenceDeadline).toISOString()}; a dispute cannot be resolved before it closes (dispute-v1 §5.3)`,
+          code: "DISPUTE_EVIDENCE_WINDOW_OPEN",
+          status: 409,
+          evidence_deadline: evidenceDeadline,
+        },
+        409,
+      );
     }
 
     // 2. Per-dispute advisory lock. Collapse concurrent calls.

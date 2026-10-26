@@ -136,7 +136,13 @@ import {
   hash as sha256,
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
-import { AUTH_HEADER, JSON_AUTH, createTestRelay, seedX402PaidTask } from "./test-helpers.js";
+import {
+  closeEvidenceWindow,
+  AUTH_HEADER,
+  JSON_AUTH,
+  createTestRelay,
+  seedX402PaidTask,
+} from "./test-helpers.js";
 import {
   creditAccount,
   debitAccount,
@@ -922,6 +928,7 @@ async function buildRound2ClawbackInsufficient(relay: SyncRelay): Promise<World>
   );
   const filed = await fileDispute(w, "W");
   if (filed.status !== 200) throw new Error(`round2 file: ${filed.status} ${await filed.text()}`);
+  closeEvidenceWindow(relay, w.disputes[0]!);
   const resolved = await relay.app.request(`/api/v1/disputes/${w.disputes[0]}/resolve`, {
     method: "POST",
     headers: JSON_AUTH,
@@ -1168,6 +1175,10 @@ async function step(w: World, a: Action): Promise<number> {
           : workerWins
             ? { resolution: a.kind, fund_action: "release_to_worker", split_ratio: 1 }
             : { resolution: a.kind, fund_action: "refund_to_delegator", split_ratio: 0 };
+      // The §5.3 evidence window has run: the harness drives the verdicts
+      // themselves, not the window (dispute-resolve-evidence-window.test.ts).
+      const disputeId = w.disputes[a.k];
+      if (disputeId !== undefined) closeEvidenceWindow(w.relay, disputeId);
       const res = await app.request(`/api/v1/disputes/${w.disputes[a.k]}/resolve`, {
         method: "POST",
         headers: JSON_AUTH,
