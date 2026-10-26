@@ -22,7 +22,15 @@
  * pass straight through (the pre-push hook re-runs itself under the lock).
  */
 
-import { closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -40,6 +48,16 @@ export interface VerifyLockRecord {
   pid: number;
   holder: string;
   startedAt: string;
+  /** The command the holder runs (with-verify-lock's child). The lock is held
+   *  while EITHER is alive: a holder killed with SIGKILL cannot release, and
+   *  its command keeps running, so its pid alone would hand the machine to a
+   *  second run mid-flight. */
+  childPid?: number;
+}
+
+/** A record is live while its holder or the command it started is alive. */
+export function recordAlive(record: VerifyLockRecord): boolean {
+  return pidAlive(record.pid) || (record.childPid != null && pidAlive(record.childPid));
 }
 
 export function verifyLockPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -85,7 +103,7 @@ function tryAcquire(path: string, holder: string): VerifyLockRecord | null {
       // A record not yet written (the holder is between open and write) reads
       // as null: treat it as held, never as stale.
       if (existing == null) return { pid: -1, holder: "(starting)", startedAt: "" };
-      if (pidAlive(existing.pid)) return existing;
+      if (recordAlive(existing)) return existing;
       try {
         unlinkSync(path);
       } catch {
@@ -95,6 +113,9 @@ function tryAcquire(path: string, holder: string): VerifyLockRecord | null {
   }
   return readVerifyLock(path) ?? { pid: -1, holder: "(unknown)", startedAt: "" };
 }
+
+/** Releases the lock; `recordChild` names the command the holder started. */
+export type VerifyLockRelease = (() => void) & { recordChild?: (childPid: number) => void };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -107,7 +128,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export async function acquireVerifyLock(
   holder: string,
   opts: { env?: NodeJS.ProcessEnv; log?: (line: string) => void } = {},
-): Promise<() => void> {
+): Promise<VerifyLockRelease> {
   const env = opts.env ?? process.env;
   const log = opts.log ?? ((line: string) => process.stderr.write(`${line}\n`));
   const inherited = env[VERIFY_LOCK_ENV];
@@ -141,6 +162,7 @@ export async function acquireVerifyLock(
   }
 
   env[VERIFY_LOCK_ENV] = String(process.pid);
+  const ownRecord = readVerifyLock(path);
   let released = false;
   const release = (): void => {
     if (released) return;
@@ -154,5 +176,12 @@ export async function acquireVerifyLock(
     }
   };
   process.on("exit", release);
-  return release;
+  return Object.assign(release, {
+    /** Record the command this holder started, so the lock outlives a
+     *  holder killed before it could release. */
+    recordChild(childPid: number): void {
+      if (ownRecord?.pid !== process.pid) return;
+      writeFileSync(path, JSON.stringify({ ...ownRecord, childPid }));
+    },
+  });
 }

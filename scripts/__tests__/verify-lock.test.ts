@@ -4,7 +4,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -100,5 +100,54 @@ describe("verify-lock", () => {
     const r = await run("impatient", "true", { ...env, MOTEBIT_VERIFY_LOCK_TIMEOUT_MS: "500" });
     expect(r.code).toBe(75);
     expect(r.stderr).toMatch(/gave up .* held by `a long push`/);
+  }, 30_000);
+
+  it("a holder killed with SIGKILL keeps the lock until the command it started ends", async () => {
+    const env = lockEnv();
+    const log = join(dir, "log");
+    writeFileSync(log, "");
+    const first = spawn(
+      TSX,
+      [WRAPPER, "killed", "--", "sh", "-c", `sleep 2; echo "first done" >> ${log}`],
+      { env: { ...process.env, MOTEBIT_VERIFY_LOCK_PID: "", ...env } },
+    );
+    // Wait until the first run holds the lock and has recorded its command.
+    const lockFile = env.MOTEBIT_VERIFY_LOCK_FILE!;
+    let holderPid = 0;
+    for (let i = 0; i < 100 && holderPid === 0; i++) {
+      try {
+        const rec = JSON.parse(readFileSync(lockFile, "utf-8")) as {
+          pid: number;
+          childPid?: number;
+        };
+        if (rec.childPid) holderPid = rec.pid;
+      } catch {
+        /* not yet */
+      }
+      if (holderPid === 0) await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(holderPid).toBeGreaterThan(0);
+    // Kill the HOLDER itself (the recorded pid), not the tsx launcher that
+    // started it: SIGKILL gives it no chance to release.
+    process.kill(holderPid, "SIGKILL");
+    first.kill("SIGKILL");
+    const second = await run("next", `echo "second start" >> ${log}`, env);
+    expect(second.code).toBe(0);
+    expect(second.stderr).toMatch(/waiting/);
+    // The orphaned command finished before the second run began.
+    expect(readFileSync(log, "utf-8").trim().split("\n")).toEqual(["first done", "second start"]);
+  }, 60_000);
+
+  it("fails closed: a lock it cannot create stops the run before the command starts", async () => {
+    const env = lockEnv();
+    const marker = join(dir, "ran");
+    // The lock's parent is a FILE, so the lock can never be created.
+    writeFileSync(join(dir, "not-a-dir"), "");
+    const r = await run("blocked", `touch ${marker}`, {
+      MOTEBIT_VERIFY_LOCK_FILE: join(dir, "not-a-dir", "verify.lock"),
+    });
+    expect(r.code).toBe(75);
+    expect(existsSync(marker)).toBe(false);
+    void env;
   }, 30_000);
 });
