@@ -388,8 +388,8 @@ export const MUST_T1: Fixture[] = [
   },
   {
     name: "an allowlisted path that becomes owned is T1",
-    diff: modify("docs/security/dependency-triage.md", ["old"], ["new"]),
-    codeowners: `${CODEOWNERS}\n/docs/security/ @hakimlabs\n`,
+    diff: modify("docs/parity-inventory.md", ["old"], ["new"]),
+    codeowners: `${CODEOWNERS}\n/docs/parity-inventory.md @hakimlabs\n`,
     expect: ["codeowners-owned"],
   },
   {
@@ -422,7 +422,7 @@ export const MUST_T1: Fixture[] = [
   },
   {
     name: "a deleted doc",
-    diff: del("docs/security/dependency-triage.md", ["# triage"]),
+    diff: del("docs/parity-inventory.md", ["# triage"]),
     expect: ["deletion"],
   },
   {
@@ -594,6 +594,78 @@ const ROUND_TWO: Fixture[] = [
     expect: ["not-allowlisted"],
   },
   {
+    name: "bench tool config: package.json (flips the bench's module format)",
+    diff: add("scripts/bench/intelligence-parity/package.json", ['{ "type": "commonjs" }']),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bench tool config: tsconfig.json",
+    diff: add("scripts/bench/intelligence-parity/tsconfig.json", [
+      '{ "compilerOptions": { "strict": false } }',
+    ]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bench tool config: .eslintrc.json",
+    diff: add("scripts/bench/intelligence-parity/.eslintrc.json", [
+      '{ "root": true, "rules": {} }',
+    ]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "bench tool config: .prettierrc.json",
+    diff: add("scripts/bench/intelligence-parity/.prettierrc.json", ['{ "semi": false }']),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "a directory named prompts.json (an include names files, never a directory's contents)",
+    diff: add("scripts/bench/intelligence-parity/prompts.json/evil.ts", ["export {};"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "the route-C format example (nothing parses it as data)",
+    diff: modify(
+      "scripts/bench/intelligence-parity/route-c.example.json",
+      ['  "a": 1'],
+      ['  "a": 2'],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "docs/CLAUDE.local.md",
+    diff: add("docs/CLAUDE.local.md", ["# local agent rules"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "docs/GEMINI.md",
+    diff: add("docs/GEMINI.md", ["# agent rules"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "docs/.cursor/rules/x.md",
+    diff: add("docs/.cursor/rules/x.md", ["# agent rules"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "docs/.agents/x.md",
+    diff: add("docs/.agents/x.md", ["# agent rules"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "docs/copilot-instructions.md",
+    diff: add("docs/copilot-instructions.md", ["# agent rules"]),
+    expect: ["not-allowlisted"],
+  },
+  {
+    name: "docs/security/** (the accepted-CVE ledger)",
+    diff: modify(
+      "docs/security/dependency-triage.md",
+      ["| CVE-X | accepted until fix |"],
+      ["| CVE-X | accepted forever |"],
+    ),
+    expect: ["not-allowlisted"],
+  },
+  {
     name: "docs/guides/SKILL.md (a skill outside .claude/)",
     diff: add("docs/guides/SKILL.md", ["---", "name: x", "---"]),
     expect: ["not-allowlisted"],
@@ -624,8 +696,8 @@ const ROUND_TWO: Fixture[] = [
     expect: ["not-allowlisted", "case-collision"],
   },
   {
-    name: "docs/Security/dependency-triage.md (case of a tracked directory)",
-    diff: add("docs/Security/dependency-triage.md", ["# shadow"]),
+    name: "docs/Proofs/live-sovereign-migration.md (case of a tracked directory)",
+    diff: add("docs/Proofs/live-sovereign-migration.md", ["# shadow"]),
     expect: ["case-collision"],
   },
   {
@@ -640,11 +712,7 @@ MUST_T1.push(...ROUND_TWO);
 export const MUST_T0: { name: string; diff: string }[] = [
   {
     name: "a docs/ guide edit",
-    diff: modify(
-      "docs/security/dependency-triage.md",
-      ["The old sentence."],
-      ["The new, clearer sentence."],
-    ),
+    diff: modify("docs/parity-inventory.md", ["The old sentence."], ["The new, clearer sentence."]),
   },
   {
     name: "a new docs/ page",
@@ -657,7 +725,7 @@ export const MUST_T0: { name: string; diff: string }[] = [
   {
     name: "two allowlisted files in one diff",
     diff:
-      modify("docs/security/dependency-triage.md", ["a"], ["b"]) +
+      modify("docs/parity-inventory.md", ["a"], ["b"]) +
       modify("scripts/bench/intelligence-parity/prompts.json", ["c"], ["d"]),
   },
 ];
@@ -701,7 +769,7 @@ describe("the rule table and the allowlist", () => {
 
   it("the allowlist is exactly the documented set (widening it is a visible diff in an owned file)", () => {
     expect(ALLOWLIST).toEqual({
-      include: ["docs/**/*.md", "scripts/bench/**/*.json"],
+      include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],
       exclude: [
         "docs/doctrine/**",
         "docs/proposals/**",
@@ -709,9 +777,15 @@ describe("the rule table and the allowlist", () => {
         "docs/design/**",
         "docs/drift-defenses.md",
         "docs/operator/**",
+        "docs/security/**",
         "**/CLAUDE.md",
+        "**/CLAUDE.local.md",
         "**/AGENTS.md",
+        "**/GEMINI.md",
+        "**/copilot-instructions.md",
         "**/.claude/**",
+        "**/.cursor/**",
+        "**/.agents/**",
         "**/SKILL.md",
         "skills/**",
       ],
@@ -719,7 +793,11 @@ describe("the rule table and the allowlist", () => {
   });
 
   it("isAllowlisted draws the documented boundary", () => {
-    for (const p of ["docs/a.md", "docs/security/dependency-triage.md", "scripts/bench/x/y.json"])
+    for (const p of [
+      "docs/a.md",
+      "docs/parity-inventory.md",
+      "scripts/bench/intelligence-parity/prompts.json",
+    ])
       expect(isAllowlisted(p), p).toBe(true);
     for (const p of [
       "docs/doctrine/a.md",
@@ -744,6 +822,19 @@ describe("the rule table and the allowlist", () => {
       "apps/docs/content/docs/meta.json",
       "apps/docs/src/page.tsx",
       "scripts/bench/run.ts",
+      "scripts/bench/x/y.json",
+      "scripts/bench/x/package.json",
+      "scripts/bench/x/tsconfig.json",
+      "scripts/bench/x/.eslintrc.json",
+      "scripts/bench/x/.prettierrc.json",
+      "scripts/bench/x/prompts.json/evil.ts",
+      "scripts/bench/x/y/prompts.json",
+      "docs/security/dependency-triage.md",
+      "docs/CLAUDE.local.md",
+      "docs/GEMINI.md",
+      "docs/.cursor/rules/a.md",
+      "docs/.agents/a.md",
+      "docs/sub/copilot-instructions.md",
       "README.md",
       "xdocs/a.md",
     ])

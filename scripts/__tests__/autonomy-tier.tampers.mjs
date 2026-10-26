@@ -87,32 +87,78 @@ const TAMPERS = [
   {
     name: "allowlist re-admits apps/docs content (mdx)",
     file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
+    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
     replacement:
-      '  include: ["docs/**/*.md", "apps/docs/content/**/*.mdx", "scripts/bench/**/*.json"],',
+      '  include: ["docs/**/*.md", "apps/docs/content/**/*.mdx", "scripts/bench/*/prompts.json"],',
     red: T1("the docs quickstart's runnable block exfiltrates CI env (check-docs-quickstart-runs)"),
   },
   {
     name: "allowlist re-admits apps/docs content (md)",
     file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
+    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
     replacement:
-      '  include: ["docs/**/*.md", "apps/docs/content/**/*.md", "scripts/bench/**/*.json"],',
+      '  include: ["docs/**/*.md", "apps/docs/content/**/*.md", "scripts/bench/*/prompts.json"],',
     red: T1("an apps/docs markdown page (same pipeline as MDX)"),
   },
   {
     name: "allowlist widened to **/*.md (README becomes T0)",
     file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
-    replacement: '  include: ["**/*.md", "scripts/bench/**/*.json"],',
+    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
+    replacement: '  include: ["**/*.md", "scripts/bench/*/prompts.json"],',
     red: T1("README.md"),
   },
   {
     name: "allowlist widened to **/*.md (DOCTRINE.md becomes T0)",
     file: CLASSIFIER,
-    text: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
-    replacement: '  include: ["**/*.md", "scripts/bench/**/*.json"],',
+    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
+    replacement: '  include: ["**/*.md", "scripts/bench/*/prompts.json"],',
     red: T1("DOCTRINE.md"),
+  },
+  {
+    name: "allowlist widened back to scripts/bench/**/*.json (bench tool config becomes T0)",
+    file: CLASSIFIER,
+    text: '  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],',
+    replacement: '  include: ["docs/**/*.md", "scripts/bench/**/*.json"],',
+    red: T1("bench tool config: package.json (flips the bench's module format)"),
+  },
+  {
+    name: "an include covers a directory named like its file",
+    file: CLASSIFIER,
+    text: "    src.endsWith(DESCENT_SUFFIX) ? `${src.slice(0, -DESCENT_SUFFIX.length)}$` : src,",
+    replacement: "    src,",
+    red: T1(
+      "a directory named prompts.json (an include names files, never a directory's contents)",
+    ),
+  },
+  {
+    name: "allowlist: docs/security/** is not excluded",
+    ...dropLine('    "docs/security/**",'),
+    red: T1("docs/security/** (the accepted-CVE ledger)"),
+  },
+  {
+    name: "allowlist: **/GEMINI.md is not excluded",
+    ...dropLine('    "**/GEMINI.md",'),
+    red: T1("docs/GEMINI.md"),
+  },
+  {
+    name: "allowlist: **/CLAUDE.local.md is not excluded",
+    ...dropLine('    "**/CLAUDE.local.md",'),
+    red: T1("docs/CLAUDE.local.md"),
+  },
+  {
+    name: "allowlist: **/copilot-instructions.md is not excluded",
+    ...dropLine('    "**/copilot-instructions.md",'),
+    red: T1("docs/copilot-instructions.md"),
+  },
+  {
+    name: "allowlist: **/.agents/** is not excluded",
+    ...dropLine('    "**/.agents/**",'),
+    red: T1("docs/.agents/x.md"),
+  },
+  {
+    name: "allowlist: **/.cursor/** is not excluded",
+    ...dropLine('    "**/.cursor/**",'),
+    red: T1("docs/.cursor/rules/x.md"),
   },
   // Case.
   {
@@ -124,7 +170,7 @@ const TAMPERS = [
   },
   off(
     '        if (collision !== null) fire("case-collision"',
-    T1("docs/Security/dependency-triage.md (case of a tracked directory)"),
+    T1("docs/Proofs/live-sovereign-migration.md (case of a tracked directory)"),
   ),
   // Fail-closed.
   off('      if (f.renamed) fire("rename"', T1("a rename within docs/ (both names allowlisted)")),
@@ -173,6 +219,15 @@ const TAMPERS = [
     text: '      r.commitId === pr.headSha &&\n      TRUSTED_ASSOCIATIONS.has(r.association ?? ""),',
     replacement: "      r.commitId === pr.headSha,",
     red: "the named design cases a founder-login approval without a trusted association does not count",
+    test: VERDICT_TEST,
+  },
+  {
+    name: "verdict: a later machine review un-binds an earlier machine approval",
+    file: VERDICT,
+    text: '    (r) => lower(r.login) === lower(MACHINE_REVIEWER) && r.state === "APPROVED",\n  );',
+    replacement:
+      '    (r) => lower(r.login) === lower(MACHINE_REVIEWER) && r.state === "APPROVED" && standing.get(lower(MACHINE_REVIEWER)) === r,\n  );',
+    red: "the named design cases a machine approval binds for good, even after a later dismissed machine review",
     test: VERDICT_TEST,
   },
   {

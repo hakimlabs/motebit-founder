@@ -61,7 +61,8 @@ const pr = (tier: PrInput["tier"], reviews: Review[]): PrInput => ({
 });
 
 type Founder = "none" | "head" | "stale" | "changes-requested";
-type Machine = "none" | "approved" | "approved-stale" | "dismissed" | "commented";
+type Machine =
+  "none" | "approved" | "approved-stale" | "dismissed" | "approved-then-changes" | "commented";
 type Other = "none" | "collaborator" | "outsider";
 type Association = "OWNER" | "MEMBER" | "COLLABORATOR" | "CONTRIBUTOR" | "NONE" | null;
 
@@ -73,7 +74,8 @@ function oracle(
   _other: Other,
   killVar: string | undefined,
 ): boolean {
-  const machineApproved = machine === "approved" || machine === "approved-stale";
+  // Any APPROVED review by the machine login binds for good, whatever came after.
+  const machineApproved = machine !== "none" && machine !== "commented";
   const founderApproved =
     founder === "head" &&
     (founderAssociation === "OWNER" ||
@@ -107,6 +109,10 @@ function reviewsFor(
     out.push(review(MACHINE_REVIEWER, "APPROVED", HEAD));
     out.push(review(MACHINE_REVIEWER, "DISMISSED", HEAD));
   }
+  if (machine === "approved-then-changes") {
+    out.push(review(MACHINE_REVIEWER, "APPROVED", HEAD));
+    out.push(review(MACHINE_REVIEWER, "CHANGES_REQUESTED", HEAD));
+  }
   if (machine === "commented") out.push(review(MACHINE_REVIEWER, "COMMENTED", HEAD));
   if (other === "collaborator")
     out.push(review("some-maintainer", "APPROVED", HEAD, undefined, "COLLABORATOR"));
@@ -125,7 +131,14 @@ describe("decidePr — exhaustive against the design oracle", () => {
     "NONE",
     null,
   ];
-  const machines: Machine[] = ["none", "approved", "approved-stale", "dismissed", "commented"];
+  const machines: Machine[] = [
+    "none",
+    "approved",
+    "approved-stale",
+    "dismissed",
+    "approved-then-changes",
+    "commented",
+  ];
   const others: Other[] = ["none", "collaborator", "outsider"];
   const kills: (string | undefined)[] = ["on", "off", undefined, "", "On"];
   let cases = 0;
@@ -144,11 +157,19 @@ describe("decidePr — exhaustive against the design oracle", () => {
               });
             }
   it("enumerated the whole space", () => {
-    expect(cases).toBe(3 * 4 * 6 * 5 * 3 * 5);
+    expect(cases).toBe(3 * 4 * 6 * 6 * 3 * 5);
   });
 });
 
 describe("the named design cases", () => {
+  it("a machine approval binds for good, even after a later dismissed machine review", () => {
+    const v = decidePr(
+      pr("T1", [review(MACHINE_REVIEWER, "APPROVED"), review(MACHINE_REVIEWER, "DISMISSED")]),
+      "on",
+    );
+    expect(v).toMatchObject({ pass: false, reason: "machine-approved-t1" });
+  });
+
   it("an outsider's approval beside the machine's does not lift an engaged kill switch", () => {
     const v = decidePr(
       pr("T0", [

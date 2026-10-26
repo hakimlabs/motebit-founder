@@ -17,9 +17,11 @@
  * A founder approval passes even a T1 PR the machine also approved: the founder
  * reviewed it. It counts only on the PR's CURRENT head commit (a stale approval
  * cannot carry later commits) and only with an `author_association` of OWNER,
- * MEMBER or COLLABORATOR. A machine approval binds on ANY commit and whatever
- * its association (fail closed in both directions: what could pass a PR is
- * narrowed, what could fail one never is).
+ * MEMBER or COLLABORATOR. A machine approval binds on ANY commit, whatever
+ * its association, and FOR GOOD — any APPROVED review by the machine login,
+ * whatever came after it (a dismissal or later review does not un-bind it).
+ * Fail closed in both directions: what could pass a PR is narrowed, what could
+ * fail one never is.
  * A user's standing review state is their latest APPROVED / CHANGES_REQUESTED
  * / DISMISSED review (COMMENTED and PENDING do not change it), as GitHub
  * computes it.
@@ -119,7 +121,12 @@ export function killSwitchEngaged(value: string | undefined): boolean {
 export function decidePr(pr: PrInput, autonomyT0: string | undefined): PrVerdict {
   const standing = standingStates(pr.reviews);
   const approved = [...standing.entries()].filter(([, r]) => r.state === "APPROVED");
-  const machine = approved.some(([login]) => login === lower(MACHINE_REVIEWER));
+  // A machine APPROVED review binds for good: a later review, dismissal or
+  // change request by the same login never un-binds it (only narrowing of what
+  // may pass is allowed, never of what fails).
+  const machine = pr.reviews.some(
+    (r) => lower(r.login) === lower(MACHINE_REVIEWER) && r.state === "APPROVED",
+  );
   const founderAtHead = approved.some(
     ([login, r]) =>
       login === lower(FOUNDER) &&

@@ -57,17 +57,20 @@ export const ALLOWLIST = {
    * 2026-10-26, listed in the PR): markdown under docs/ is only matched and
    * counted by gates — the one gate that EXECUTES doc content
    * (check-image-provenance, cosign lines) reads docs/operator/self-host.md,
-   * which is excluded; the bench JSON is `JSON.parse`d as prompts by a
-   * workflow_dispatch-only bench with network-free tools. `apps/docs/content`
+   * which is excluded; each bench's prompts.json is `JSON.parse`d as prompts
+   * by a workflow_dispatch-only bench with network-free tools (only that file:
+   * any other JSON there may be tool config — package.json, tsconfig.json,
+   * .eslintrc.json, .prettierrc.json — and route-c.example.json is a format
+   * example nothing parses). `apps/docs/content`
    * is NOT here: fumadocs-mdx evaluates MDX ESM at build, and
    * check-docs-quickstart-runs runs a code block from it under CI env.
    */
-  include: ["docs/**/*.md", "scripts/bench/**/*.json"],
+  include: ["docs/**/*.md", "scripts/bench/*/prompts.json"],
   /**
    * Inside an include, still T1: agent-facing doctrine, the autonomy design
    * itself, runbooks, designs, the drift inventory, operator-facing docs (deploy
-   * pins and security posture), and agent instructions under any name or
-   * depth. Matched case-insensitively.
+   * pins and security posture), security docs (the accepted-CVE ledger), and
+   * agent instructions under any name or depth. Matched case-insensitively.
    */
   exclude: [
     "docs/doctrine/**",
@@ -76,15 +79,32 @@ export const ALLOWLIST = {
     "docs/design/**",
     "docs/drift-defenses.md",
     "docs/operator/**",
+    "docs/security/**",
     "**/CLAUDE.md",
+    "**/CLAUDE.local.md",
     "**/AGENTS.md",
+    "**/GEMINI.md",
+    "**/copilot-instructions.md",
     "**/.claude/**",
+    "**/.cursor/**",
+    "**/.agents/**",
     "**/SKILL.md",
     "skills/**",
   ],
 } as const;
 
-const INCLUDE = ALLOWLIST.include.map(patternToRegex);
+/**
+ * An include names FILES: CODEOWNERS syntax lets a pattern whose last segment
+ * has no `*` also cover a directory of that name (`.../prompts.json/x.ts`), so
+ * that descent is cut off here. Exclusions keep it (wider is safer there).
+ */
+const DESCENT_SUFFIX = "(?:\\/.+)?$";
+const INCLUDE = ALLOWLIST.include.map((p) => {
+  const src = patternToRegex(p).source;
+  return new RegExp(
+    src.endsWith(DESCENT_SUFFIX) ? `${src.slice(0, -DESCENT_SUFFIX.length)}$` : src,
+  );
+});
 const EXCLUDE = ALLOWLIST.exclude.map(patternToRegex);
 /** Exclusions hold whatever the case (a case-insensitive filesystem, or a reader that folds case). */
 const EXCLUDE_ANY_CASE = EXCLUDE.map((r) => new RegExp(r.source, "i"));
