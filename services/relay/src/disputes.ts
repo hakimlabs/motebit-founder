@@ -52,7 +52,9 @@ import {
   markOrchestrationTimedOut,
   ORCHESTRATION_WORKER_INTERVAL_MS,
   recordOrchestrationAttempt,
+  type FinalizeResult,
   type OrchestrationRow,
+  type StandingRecord,
 } from "./dispute-orchestration.js";
 import { verificationKeyFor } from "./identity-keys.js";
 import {
@@ -594,6 +596,23 @@ function outcomeToResponse(c: Context, disputeId: string, outcome: ResolveOutcom
       202,
     );
   }
+  if (outcome.kind === "not_committed") {
+    // dispute-v1 §6.6: a relay never reports a verdict it did not commit.
+    // The body carries the record that stands: the dispute's state now and
+    // its round-1 resolution (null when none was committed).
+    return c.json(
+      {
+        error:
+          "This resolution was not committed: the dispute was resolved or left adjudication concurrently. The standing record is returned.",
+        code: "DISPUTE_RESOLUTION_NOT_COMMITTED",
+        status: 409,
+        dispute_id: disputeId,
+        state: outcome.standing.state,
+        resolution: outcome.standing.resolution,
+      },
+      409,
+    );
+  }
   return c.json({
     ok: true,
     dispute_id: disputeId,
@@ -622,7 +641,10 @@ interface ResolveData {
  * attempt — caller surfaces 202 to client, /resolve poll later.
  */
 type ResolveOutcome =
-  { kind: "resolved"; data: ResolveData } | { kind: "deferred"; orchestration: OrchestrationRow };
+  | { kind: "resolved"; data: ResolveData }
+  | { kind: "deferred"; orchestration: OrchestrationRow }
+  /** This call's verdict did not commit; `standing` is what stands. */
+  | { kind: "not_committed"; standing: StandingRecord };
 
 // === §6.2 Federation Orchestrator ===
 //
@@ -1135,8 +1157,9 @@ export type AttemptOutcome =
  * fan-out cycle) and decides ready / deferred / timed_out.
  *
  * The caller (the /resolve handler or the deferred worker) is responsible
- * for the resolution-write — `finalizeFederationResolution` from
- * `dispute-orchestration.ts` performs the atomic insert + state transition.
+ * for the resolution-write — round 1 through `finalizeFederationResolution`
+ * (`dispute-orchestration.ts`), round 2 through `commitRound2Verdict`; each
+ * performs its atomic, state-guarded insert + transition.
  */
 export async function attemptOrFinalizeFederationResolution(
   dispute: { dispute_id: string; body_json: string; filer_role: FilerRole | null },
@@ -1196,13 +1219,16 @@ export async function attemptOrFinalizeFederationResolution(
 /**
  * Background worker — runs ONE poll cycle. Picks up `in_progress`
  * orchestration rows whose `next_attempt_at <= now`, runs an attempt
- * for each, finalizes ready/timed_out outcomes via
- * `finalizeFederationResolution`. Idempotent: rows finalized in a
- * prior cycle don't re-appear (status flips to done/timed_out).
+ * for each, and commits ready/timed_out outcomes through the round's one
+ * writer: round 1 via `finalizeFederationResolution` (guarded on
+ * `evidence | arbitration`), round 2 via `commitRound2Verdict` (guarded on
+ * `appealed`, fund action in the same transaction). Idempotent: rows
+ * finalized in a prior cycle don't re-appear (status flips to
+ * done/timed_out).
  *
- * Cross-process safety: bounded by DB UNIQUE constraints — concurrent
- * workers across processes converge cleanly (one finalize wins, others
- * no-op via constraint catch in `finalizeFederationResolution`).
+ * Cross-process safety: both writers are state-guarded (and backed by
+ * `UNIQUE(dispute_id, round)`), so concurrent workers across processes
+ * converge — one commit wins, the others write nothing.
  */
 export async function runDeferredOrchestrationCycle(deps: {
   db: DatabaseDriver;
@@ -1261,19 +1287,40 @@ export async function runDeferredOrchestrationCycle(deps: {
         deps,
       );
       if (outcome.state === "ready" || outcome.state === "timed_out") {
-        await finalizeFederationResolution(
-          {
-            disputeId: item.dispute_id,
-            round: item.round,
-            resolution: outcome.result.resolution,
-            rationale: outcome.result.rationale,
-            fund_action: outcome.result.fund_action,
-            split_ratio: outcome.result.split_ratio,
-            adjudicator_votes: outcome.result.adjudicator_votes,
-            resolvedAt: now,
-          },
-          deps,
-        );
+        if (item.round === 2) {
+          // Round 2 has one writer: `commitRound2Verdict`, guarded on
+          // `appealed`, with the fund action in the same transaction (the
+          // `/appeal` handler and the single-relay operator verdict commit
+          // through it too). It needs the whole row: the fund action reads
+          // the allocation and amount from it. A dispute no longer
+          // `appealed` writes nothing (409, logged below); a refused or
+          // frozen fund action keeps the signed round-2 row and is retried
+          // on read (`tryFinalizePersistedRound2`).
+          const full = getDispute(db, item.dispute_id);
+          if (!full) throw new Error(`dispute ${item.dispute_id} vanished mid-cycle`);
+          await commitRound2Verdict(db, deps.relayIdentity, full, outcome.result);
+        } else {
+          const committed = await finalizeFederationResolution(
+            {
+              disputeId: item.dispute_id,
+              round: 1,
+              resolution: outcome.result.resolution,
+              rationale: outcome.result.rationale,
+              fund_action: outcome.result.fund_action,
+              split_ratio: outcome.result.split_ratio,
+              adjudicator_votes: outcome.result.adjudicator_votes,
+              resolvedAt: now,
+            },
+            deps,
+          );
+          if (!committed.persisted) {
+            logger.info("dispute.orchestration.round_1_not_committed", {
+              disputeId: item.dispute_id,
+              state: committed.standing.state,
+              standingResolution: committed.standing.resolution?.resolution ?? null,
+            });
+          }
+        }
         if (outcome.state === "ready") ready++;
         else timedOut++;
       } else {
@@ -2027,9 +2074,14 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       //    the shared `finalizeFederationResolution` helper from
       //    `dispute-orchestration.ts` so the worker can finalize through
       //    the same code path. Single-relay disputes go through the
-      //    same helper for shape consistency.
+      //    same helper for shape consistency. It is guarded on
+      //    `evidence | arbitration`: a verdict that lost a race (another
+      //    process's /resolve or the deferred worker committed first, or the
+      //    dispute left those states during the awaits above) writes nothing
+      //    and is answered 409 with the record that stands, never 200.
+      let committed: FinalizeResult;
       try {
-        await finalizeFederationResolution(
+        committed = await finalizeFederationResolution(
           {
             disputeId,
             round: 1,
@@ -2046,6 +2098,16 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
         throw new HTTPException(500, {
           message: `Dispute resolution persistence failed: ${err instanceof Error ? err.message : String(err)}`,
         });
+      }
+      if (!committed.persisted) {
+        logger.warn("dispute.resolve.not_committed", {
+          disputeId,
+          resolution: resolutionOutcome,
+          isFederation: isFederationPath,
+          state: committed.standing.state,
+          standingResolution: committed.standing.resolution?.resolution ?? null,
+        });
+        return { kind: "not_committed", standing: committed.standing };
       }
 
       logger.info("dispute.resolved", {

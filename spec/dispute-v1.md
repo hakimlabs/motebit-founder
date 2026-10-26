@@ -245,6 +245,8 @@ The reference relay writes a single `relay_disputes` row with JSON resolution da
 }
 ```
 
+A relay MUST commit a round-1 resolution only while the dispute is in `evidence` or `arbitration`, and MUST NOT report a resolution it did not commit. When a `/resolve` call's verdict loses to a concurrent commit (another process, or the orchestrator's background worker), or the dispute has left those states during the call, the relay writes nothing and answers `409` with `code: "DISPUTE_RESOLUTION_NOT_COMMITTED"` and the record that stands: the dispute's current `state` and its committed round-1 `resolution` (`null` when there is none). This holds on the single-relay and the federation path alike; `200` means this call's verdict is the one recorded.
+
 Parties SHOULD poll `GET /api/v1/disputes/:disputeId` (read-only, returns the cached resolution once finalized) until the resolution is available. The operator MAY re-POST `/resolve` (idempotent — repeated calls drive additional attempts); a party MUST NOT expect to, since the relay refuses it. The orchestrator's background worker drives retries independently of client polls — the dispute will eventually resolve (or §6.6 timeout-fallback) regardless of whether any client is actively polling.
 
 ## 7. Fund Handling
@@ -397,7 +399,7 @@ The six routes below are the binding cross-implementation contract for the dispu
 
 - `POST /api/v1/allocations/:allocationId/dispute` — file a dispute against a budget allocation (§4).
 - `POST /api/v1/disputes/:disputeId/evidence` — submit additional evidence to an open dispute (§5).
-- `POST /api/v1/disputes/:disputeId/resolve` — adjudicator submits resolution (§6). Operator only: refused, and recorded, for any other caller (§6.6 client polling contract). A round-1 resolution is refused `409` `DISPUTE_EVIDENCE_WINDOW_OPEN` until `evidence_deadline` (§5.4).
+- `POST /api/v1/disputes/:disputeId/resolve` — adjudicator submits resolution (§6). Operator only: refused, and recorded, for any other caller (§6.6 client polling contract). A round-1 resolution is refused `409` `DISPUTE_EVIDENCE_WINDOW_OPEN` until `evidence_deadline` (§5.4). A resolution that did not commit is answered `409` `DISPUTE_RESOLUTION_NOT_COMMITTED` with the standing record (§6.6 client polling contract).
 - `POST /api/v1/disputes/:disputeId/appeal` — appeal a resolution (§8).
 - `GET /api/v1/disputes/:disputeId` — read dispute state, including the latest signed resolution (round 2 if appealed, else round 1).
 - `GET /api/v1/disputes/:disputeId/resolutions` — read all signed resolution rows for the dispute, ordered by round ascending. Round-1 + round-2 (after §8.3 appeal) coexist per migration 19's `UNIQUE(dispute_id, round)`. Audit-history surface; the singular endpoint preserves the one-resolution wire-format contract.
@@ -454,5 +456,6 @@ The two gates are the structural defense against a backdated `filed_at` widening
 
 ## Change Log
 
+- **1.0 (2026-10-26)** — Clarification; success responses are unchanged and one refusal is added: a relay never reports a resolution it did not commit (§6.6 client polling contract). The reference relay's round-1 commit had no state guard, so it could move a `final`, `resolved` or `appealed` dispute back to `resolved`, and `/resolve` answered `200` with a verdict that lost a concurrent commit and was never recorded. A round-1 resolution now commits only from `evidence` or `arbitration`; one that did not commit is answered `409` `DISPUTE_RESOLUTION_NOT_COMMITTED` carrying the dispute's `state` and its committed round-1 `resolution`, on the single-relay and federation paths alike. Round 2 already committed only from `appealed` (§8.3) and is unchanged.
 - **1.0 (2026-10-25)** — Clarification, no wire change: the evidence window is a guarantee (§5.4). A round-1 resolution before `evidence_deadline` is refused (`409` `DISPUTE_EVIDENCE_WINDOW_OPEN`, nothing written) — the reference relay had accepted one immediately after filing, so an operator (on the federation path, possibly a party) could decide before the counterparty's evidence was in. An operator's suspension of writes no longer refuses evidence submission; filing, resolution and appeal stay refused under it. Round 2 is unchanged (§8.3: its bundle closes at `appealed`).
 - **1.0 (2026-09-27)** — Clarification, no wire change: `POST /api/v1/disputes/:disputeId/resolve` is the operator's act and is refused for any other caller (§6.6 client polling contract, §9.5). Parties poll `GET /api/v1/disputes/:disputeId`; the earlier text told clients to poll the `POST`, which the reference relay had never authenticated (#846).
