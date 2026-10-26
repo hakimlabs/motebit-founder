@@ -15,13 +15,43 @@ So the tiers already exist. They only lack an approver that is not the founder.
 
 ## Design
 
-**T0, autonomous:** a PR whose every changed path is **unowned** in `CODEOWNERS`. A new machine user, `motebit-reviewer`, with **write** access (not a code owner, never in `CODEOWNERS`), approves and enqueues it when all of the following hold:
+**T0, autonomous:** a PR whose every changed path is **unowned** in `CODEOWNERS` **and** outside the T0 exclusions below. A new machine user, `motebit-reviewer`, with **write** access (not a code owner, never in `CODEOWNERS`), approves and enqueues it when all of the following hold.
+
+**Unowned is not enough.** `CODEOWNERS` deliberately leaves tests unowned (`**/__tests__/`, `**/*.test.ts`), and it does not own CI, dependency manifests or build tooling. A change to any of those can weaken money-path or identity-path enforcement without touching an owned file. Examples:
+
+- deleting an assertion in `services/relay/src/__tests__/`;
+- marking a test `.skip`;
+- pinning a dependency to a vulnerable version;
+- loosening a lint rule;
+- editing a workflow so a gate no longer runs.
+
+So T0 also **excludes** every PR that:
+
+1. **Changes a test or fixture whose subject is an owned path.** A test file under an owned directory, or one that imports from one (resolved by `scripts/money-identity-path.ts`).
+2. **Changes `.github/**`.** Workflows, actions, Dependabot config.
+3. **Changes dependencies or the toolchain.** Any `package.json` dependency or override field, `pnpm-lock.yaml`, `Cargo.toml`/`Cargo.lock`, `.npmrc`, `.nvmrc`, `packageManager`.
+4. **Changes enforcement itself.** `scripts/check-*`, `scripts/lib/**`, hook config (`.husky/**`, lint-staged), lint, type and test configuration (`.eslintrc*`, `tsconfig*.json`, `vitest.config*`, `turbo.json`).
+5. **Weakens any test, anywhere.** Mechanically:
+   - a net loss of `expect(`/`assert` calls in a changed test file;
+   - a new `.skip`, `.only`, `.todo`, `it.fails` or `describe.skip`;
+   - a deleted test file;
+   - a raised timeout or retry count.
+
+These go to T1. The list is a floor: when in doubt, the classifier says T1.
 
 1. Required CI is green on the PR head.
 2. The PR body carries the evidence block: red on main and green on the branch for every behavioural claim, or "no behaviour change" stated and checkable; the gates run.
-3. A cold review returned IMPLEMENT/GO with no unresolved CONFIRMED finding, for any change beyond docs and dependency patch bumps.
-4. The path check is mechanical: `motebit-reviewer` refuses if any changed path matches a `CODEOWNERS` owner. That is the same rule GitHub enforces, checked before approving.
+3. A cold review returned IMPLEMENT/GO with no unresolved CONFIRMED finding, for any change beyond docs.
+4. The tier is decided by a deterministic classifier, not by the reviewing agent. It's a committed script, `scripts/classify-autonomy-tier.ts`, which is itself an owned path. It reads the PR's diff and prints `T0` or `T1` with the rule that fired, and it covers `CODEOWNERS` ownership plus exclusions 1–5. `motebit-reviewer` refuses to approve unless it prints `T0`.
 5. The approval body is a **receipt**: what was checked, with the run ids and the review verdict.
+
+**Enforced by GitHub, not by the agent's good behaviour.** A required status check, `autonomy-tier`, runs the same classifier in CI on every PR. The check passes in three cases:
+
+- the PR classifies as T0;
+- `hakimlabs` has approved it;
+- no approval from `motebit-reviewer` is present.
+
+It **fails** when `motebit-reviewer` has approved a PR that classifies as T1, and when `AUTONOMY_T0` is `off` and the only approval is the machine user's. A compromised or mistaken reviewer session therefore cannot merge a T1 change: the ruleset blocks the merge, not the agent. The check's workflow and the classifier are owned paths, so the boundary cannot be moved by a T0 change.
 
 **T1, founder only:** any PR touching an owned path (money, identity, authority gates, constitutional files). Agents build, review, verify and publish it; it waits for `hakimlabs`. Unchanged from today.
 
@@ -31,15 +61,19 @@ So the tiers already exist. They only lack an approver that is not the founder.
 
 - **Rate limit:** at most 6 T0 merges per day, and at most 2 in the queue at once.
 - **Auto-revert:** if `main` goes red within 2 hours of a T0 merge and the failure reproduces on the merge commit but not its parent, the steward opens a revert PR (itself T0), and autonomy pauses until a human looks.
-- **Kill switch:** repository variable `AUTONOMY_T0=off`. The steward reads it before every approval.
+- **Kill switch:** repository variable `AUTONOMY_T0=off`. The steward reads it before every approval, and the required `autonomy-tier` check enforces it, so it holds even if the steward ignores it.
 - **Daily digest:** one comment on a pinned tracking issue listing every autonomous approval and merge, with its receipt. The founder reviews receipts, not keyboards.
 - **No self-expansion:** changes to `CODEOWNERS`, `money-identity-path.ts`, this document's rules, or the ruleset are owned paths. Autonomy cannot widen itself.
 
-## Interim (until `motebit-reviewer` exists)
+## No interim delegation
 
-From 2026-10-25 the founder granted Claude a standing delegation to approve T0 PRs **as `hakimlabs`**, with the same rails and a receipt comment on every approval ("approved by Claude under standing delegation (tier 0); evidence: …"). It is revocable by the founder at any time. It is weaker than the target design in one respect: the audit trail shows the founder's account, with only the receipt comment saying an agent decided. That gap is why the machine user is the durable form.
+An earlier draft let Claude approve T0 PRs **as `hakimlabs`** under a standing delegation recorded in the agent's memory. That is withdrawn.
+
+A grant written in an agent's notes is an instruction, not an authorization. It isn't verifiable, scoped or revocable by anything GitHub enforces, and the audit trail would show the founder's account. The Claude Code harness refused the first such approval as self-approval, and none was ever made.
+
+Until `motebit-reviewer` and the `autonomy-tier` check exist, every merge has the founder's own approval.
 
 ## Founder actions to adopt
 
 1. Create the `motebit-reviewer` GitHub user, give it write access to `motebit/motebit`, and create its fine-grained token. Claude cannot create accounts.
-2. Approve the PR that adds the `AUTONOMY_T0` variable check and the digest issue to the steward's runbook.
+2. Approve the PR that adds `scripts/classify-autonomy-tier.ts`, the required `autonomy-tier` check (added to `main-protection`), the `AUTONOMY_T0` variable, and the digest issue. The classifier ships with its own tests: one red case per exclusion, including a test-weakening diff on a relay test.
