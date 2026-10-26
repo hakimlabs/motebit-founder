@@ -19,6 +19,7 @@ const pkg = join(here, "..", "..");
 const DISPUTES = join(pkg, "src", "disputes.ts");
 const MIDDLEWARE = join(pkg, "src", "middleware.ts");
 const TEST = join(here, "dispute-evidence-window-guarantee.test.ts");
+const ORCH_TEST = join(here, "federation-orchestrator.test.ts");
 
 const RESOLVE = "dispute /resolve is refused while the evidence window is open (§5.3)";
 const FREEZE = "the emergency freeze does not consume the evidence window (rule 30, §5.4)";
@@ -81,6 +82,15 @@ const TAMPERS = [
     replacement: "const DISPUTE_EVIDENCE_PATH = /\\/evidence/;",
     red: `${FREEZE} the exemption is the evidence route only: a lookalike path under the freeze is still refused 503`,
   },
+  {
+    name: "the deferred worker finalizes round 1 before the evidence deadline",
+    file: DISPUTES,
+    text: "    if (item.round === 1 && now < dispute.evidence_deadline) {",
+    replacement:
+      "    if ((false as boolean) && item.round === 1 && now < dispute.evidence_deadline) {",
+    test: ORCH_TEST,
+    red: "attemptOrFinalizeFederationResolution — §6.2 deferred orchestrator an orchestration row opened before the evidence deadline is not finalized until it passes (§5.4)",
+  },
 ];
 
 // Run as a command with a red marker, not as a vitest entry: the relay's vitest
@@ -99,7 +109,7 @@ await runTampers(
       "exec",
       "vitest",
       "run",
-      relative(pkg, TEST),
+      relative(pkg, t.test ?? TEST),
       "-t",
       `^${escapeRegExp(t.red)}$`,
     ],

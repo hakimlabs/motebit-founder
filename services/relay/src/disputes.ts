@@ -1221,9 +1221,17 @@ export async function runDeferredOrchestrationCycle(deps: {
 
   for (const item of due) {
     const dispute = db
-      .prepare("SELECT dispute_id, body_json, filer_role FROM relay_disputes WHERE dispute_id = ?")
+      .prepare(
+        "SELECT dispute_id, body_json, filer_role, evidence_deadline FROM relay_disputes WHERE dispute_id = ?",
+      )
       .get(item.dispute_id) as
-      { dispute_id: string; body_json: string; filer_role: string | null } | undefined;
+      | {
+          dispute_id: string;
+          body_json: string;
+          filer_role: string | null;
+          evidence_deadline: number;
+        }
+      | undefined;
     if (!dispute) {
       // Dispute row pruned (retention); the orphan orchestration row
       // would block forever otherwise. Mark it timed_out so it stops
@@ -1231,6 +1239,15 @@ export async function runDeferredOrchestrationCycle(deps: {
       logger.warn("dispute.orchestration.orphan_dispute_row", { disputeId: item.dispute_id });
       markOrchestrationTimedOut(db, item.dispute_id, item.round);
       timedOut++;
+      continue;
+    }
+    // §5.4: no round-1 verdict before the evidence window closes, whichever
+    // door reaches it. `/resolve` refuses first; this covers an orchestration
+    // row that already exists (one opened by a `/resolve` before that gate).
+    // The row stays in_progress and is picked up again once the window has
+    // closed; no vote request goes out with a partial evidence bundle.
+    if (item.round === 1 && now < dispute.evidence_deadline) {
+      deferred++;
       continue;
     }
     try {
