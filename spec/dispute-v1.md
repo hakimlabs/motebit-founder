@@ -149,6 +149,8 @@ The evidence window begins when the dispute transitions to `evidence` and runs f
 - Evidence must be cryptographically verifiable. Unsigned or tampered evidence is rejected.
 - Both parties must have equal access to the evidence window. A relay must not accept evidence from one party while blocking the other.
 - The relay must not tamper with or withhold submitted evidence.
+- The evidence window is a guarantee to both parties, not an upper bound on adjudication. A relay MUST NOT accept a round-1 resolution (§6) while its own clock is before the dispute's `evidence_deadline` (§5.5, anchored per §4.4), on the single-relay and the federation path alike, and MUST refuse it before any state transition or fund action. The reference relay answers `POST /api/v1/disputes/:disputeId/resolve` in that case with `409` and `code: "DISPUTE_EVIDENCE_WINDOW_OPEN"`, carrying `evidence_deadline`, and writes nothing.
+- An operator's suspension of writes (the reference relay's emergency freeze) MUST NOT refuse a party's evidence submission while the evidence window (or the §8.3 post-resolution window) is open: evidence moves no funds, and a suspension that refused it would consume a party's window. A relay MAY continue to refuse filing (§4), resolution (§6) and appeal (§8) during the suspension; the reference relay exempts only `POST /api/v1/disputes/:disputeId/evidence` and refuses every other dispute write with `503`.
 
 ### 5.5 Convention
 
@@ -352,6 +354,8 @@ A vote-request with `round: 2` MUST carry the original round-1 evidence bundle p
 
 The `/api/v1/disputes/:disputeId/evidence` endpoint accepts submissions while the dispute is in `{opened, evidence, resolved}` state. Post-`resolved` submissions are bounded by the §8.5 appeal window (24h after `resolved_at`); once a dispute transitions to `appealed`, round-2 orchestration is in flight and the evidence bundle freezes. The §5.5 per-party cap (10 submissions per dispute) applies cumulatively across rounds.
 
+Round 2 has no evidence deadline of its own: the bundle closes when the dispute becomes `appealed`, so the §5.4 rule refusing a resolution before `evidence_deadline` governs round 1 only, and a round-2 verdict may be submitted as soon as the appeal is recorded.
+
 ### 8.4 Foundation Law
 
 - One appeal per dispute. The `final` state after appeal is terminal — no further recourse within the protocol.
@@ -393,7 +397,7 @@ The six routes below are the binding cross-implementation contract for the dispu
 
 - `POST /api/v1/allocations/:allocationId/dispute` — file a dispute against a budget allocation (§4).
 - `POST /api/v1/disputes/:disputeId/evidence` — submit additional evidence to an open dispute (§5).
-- `POST /api/v1/disputes/:disputeId/resolve` — adjudicator submits resolution (§6). Operator only: refused, and recorded, for any other caller (§6.6 client polling contract).
+- `POST /api/v1/disputes/:disputeId/resolve` — adjudicator submits resolution (§6). Operator only: refused, and recorded, for any other caller (§6.6 client polling contract). A round-1 resolution is refused `409` `DISPUTE_EVIDENCE_WINDOW_OPEN` until `evidence_deadline` (§5.4).
 - `POST /api/v1/disputes/:disputeId/appeal` — appeal a resolution (§8).
 - `GET /api/v1/disputes/:disputeId` — read dispute state, including the latest signed resolution (round 2 if appealed, else round 1).
 - `GET /api/v1/disputes/:disputeId/resolutions` — read all signed resolution rows for the dispute, ordered by round ascending. Round-1 + round-2 (after §8.3 appeal) coexist per migration 19's `UNIQUE(dispute_id, round)`. Audit-history surface; the singular endpoint preserves the one-resolution wire-format contract.
@@ -450,4 +454,5 @@ The two gates are the structural defense against a backdated `filed_at` widening
 
 ## Change Log
 
+- **1.0 (2026-10-25)** — Clarification, no wire change: the evidence window is a guarantee (§5.4). A round-1 resolution before `evidence_deadline` is refused (`409` `DISPUTE_EVIDENCE_WINDOW_OPEN`, nothing written) — the reference relay had accepted one immediately after filing, so an operator (on the federation path, possibly a party) could decide before the counterparty's evidence was in. An operator's suspension of writes no longer refuses evidence submission; filing, resolution and appeal stay refused under it. Round 2 is unchanged (§8.3: its bundle closes at `appealed`).
 - **1.0 (2026-09-27)** — Clarification, no wire change: `POST /api/v1/disputes/:disputeId/resolve` is the operator's act and is refused for any other caller (§6.6 client polling contract, §9.5). Parties poll `GET /api/v1/disputes/:disputeId`; the earlier text told clients to poll the `POST`, which the reference relay had never authenticated (#846).

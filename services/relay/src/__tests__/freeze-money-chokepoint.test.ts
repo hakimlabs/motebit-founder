@@ -66,6 +66,7 @@ import { durableFromSendUsdc } from "./durable-payout-fake.js";
 import { computeGrossAmount } from "@motebit/market";
 import { PLATFORM_FEE_RATE } from "@motebit/protocol";
 import {
+  closeEvidenceWindow,
   createTestRelay,
   createAgent,
   JSON_AUTH,
@@ -1906,6 +1907,7 @@ describe("freeze — a dispute's round-2 finalize", () => {
         ),
       });
       expect(filed.status, await filed.clone().text()).toBe(200);
+      closeEvidenceWindow(relay, disputeId);
       const resolved = await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
         method: "POST",
         headers: JSON_AUTH,

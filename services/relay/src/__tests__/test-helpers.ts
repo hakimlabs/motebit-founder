@@ -521,3 +521,19 @@ export function seedP2pSubTask(relay: SyncRelay, args: SeedP2pSubTaskArgs): stri
 
   return taskId;
 }
+
+/**
+ * Close a dispute's §5.3 evidence window: set its `evidence_deadline` (the
+ * relay's receive time + 48 h at filing) one millisecond in the past, so
+ * `/resolve` — refused with 409 `DISPUTE_EVIDENCE_WINDOW_OPEN` while the
+ * window is open — proceeds. The same move the suite makes for the appeal
+ * window (`resolved_at` in the past). Returns the deadline it wrote.
+ */
+export function closeEvidenceWindow(relay: SyncRelay, disputeId: string): number {
+  const past = Date.now() - 1;
+  const res = relay.moteDb.db
+    .prepare("UPDATE relay_disputes SET evidence_deadline = ? WHERE dispute_id = ?")
+    .run(past, disputeId);
+  if (res.changes !== 1) throw new Error(`closeEvidenceWindow: no dispute ${disputeId}`);
+  return past;
+}

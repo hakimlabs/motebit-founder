@@ -617,6 +617,9 @@ export function isMasterTokenCarveOut(method: string, path: string): boolean {
 // registerMiddleware — wire up all middleware on the app
 // ---------------------------------------------------------------------------
 
+/** The one mutating route the emergency freeze exempts at entry (dispute-v1 §5.3). */
+const DISPUTE_EVIDENCE_PATH = /^\/api\/v1\/disputes\/[^/]+\/evidence$/;
+
 export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   const { app, corsOrigin, enableDeviceAuth } = deps;
   // Fail-closed by construction: an absent token seals every gate below
@@ -644,6 +647,14 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       c.req.path === "/api/v1/admin/freeze" ||
       c.req.path === "/api/v1/admin/unfreeze"
     ) {
+      return next();
+    }
+
+    // Dispute evidence moves no money (`FREEZE_EXEMPT_TABLES`) and its window
+    // is a party's guarantee (dispute-v1 §5.3): a freeze must not consume it.
+    // The freeze holds where money moves (rule 30). ONLY this route is
+    // exempt — filing, appeal and resolve stay refused at entry.
+    if (c.req.method === "POST" && DISPUTE_EVIDENCE_PATH.test(c.req.path)) {
       return next();
     }
 

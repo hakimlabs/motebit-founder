@@ -22,6 +22,7 @@ import {
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import {
+  closeEvidenceWindow,
   AUTH_HEADER,
   JSON_AUTH,
   createTestRelay,
@@ -136,6 +137,7 @@ async function file(w: World, by: "worker" | "delegator"): Promise<string> {
 }
 
 function resolve(disputeId: string, body: Record<string, unknown>) {
+  closeEvidenceWindow(relay, disputeId);
   return relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
     method: "POST",
     headers: JSON_AUTH,

@@ -29,7 +29,13 @@ import {
   signDisputeRequest,
   signDisputeAppeal,
 } from "@motebit/encryption";
-import { AUTH_HEADER, JSON_AUTH, createTestRelay, seedX402PaidTask } from "./test-helpers.js";
+import {
+  closeEvidenceWindow,
+  AUTH_HEADER,
+  JSON_AUTH,
+  createTestRelay,
+  seedX402PaidTask,
+} from "./test-helpers.js";
 
 type Keypair = { publicKey: Uint8Array; privateKey: Uint8Array };
 const DELEGATOR = "del-race";
@@ -92,6 +98,7 @@ describe("appeal vs concurrent finalize", () => {
       ),
     });
     expect(filed.status).toBe(200);
+    closeEvidenceWindow(relay, disputeId);
     const resolved = await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
       method: "POST",
       headers: JSON_AUTH,

@@ -48,7 +48,7 @@ import type {
   DisputeEvidence,
   VoteRequest,
 } from "@motebit/protocol";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { closeEvidenceWindow, AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 interface PeerSetup {
   relayMotebitId: string;
@@ -261,6 +261,7 @@ describe("Federation appeal: round-2 quorum failure", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(disputeReq),
     });
+    closeEvidenceWindow(relay, disputeId);
     await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -355,6 +356,7 @@ describe("Federation appeal: round-1 resolved → /appeal → round-2 → final"
 
     // Round-1 resolve: federation orchestrator runs, peers vote `upheld`,
     // resolution is signed + persisted, state → resolved.
+    closeEvidenceWindow(relay, disputeId);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -553,6 +555,7 @@ describe("Federation appeal: round-2 evidence union (§8.3 + §8.5)", () => {
     expect(r1EvRes.status).toBe(200);
 
     // Round-1 resolve → state becomes `resolved`, round-1 votes captured.
+    closeEvidenceWindow(relay, disputeId);
     await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -669,6 +672,7 @@ describe("Federation appeal: round-2 evidence union (§8.3 + §8.5)", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(disputeReq),
     });
+    closeEvidenceWindow(relay, disputeId);
     await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },

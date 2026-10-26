@@ -1899,6 +1899,31 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
+    // §5.3 / §6.5: the evidence window is a guarantee, not a suggestion. A
+    // round-1 verdict before `evidence_deadline` (the relay's receive time +
+    // 48 h, §4.4) would decide before the other side's evidence is in — and
+    // on the federation path the relay deciding to fan out may itself be a
+    // party. Refused before any write: no state transition, no orchestration
+    // row, no resolution, no money. Round 2 (the `appealed` branch above) has
+    // no evidence deadline of its own — the bundle freezes at `appealed`
+    // (§8.3) — so it is not gated here.
+    const evidenceDeadline = dispute.evidence_deadline as number;
+    if (Date.now() < evidenceDeadline) {
+      logger.warn("dispute.resolve_refused.evidence_window_open", {
+        disputeId,
+        evidenceDeadline,
+      });
+      return c.json(
+        {
+          error: `The evidence window is open until ${new Date(evidenceDeadline).toISOString()}; a dispute cannot be resolved before it closes (dispute-v1 §5.3)`,
+          code: "DISPUTE_EVIDENCE_WINDOW_OPEN",
+          status: 409,
+          evidence_deadline: evidenceDeadline,
+        },
+        409,
+      );
+    }
+
     // 2. Per-dispute advisory lock. Collapse concurrent calls.
     const inFlight = resolveLocks.get(disputeId);
     if (inFlight) {

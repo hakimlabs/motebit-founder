@@ -21,7 +21,13 @@ import {
   hash as sha256,
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
-import { JSON_AUTH, createTestRelay, createAgent, seedX402PaidTask } from "./test-helpers.js";
+import {
+  closeEvidenceWindow,
+  JSON_AUTH,
+  createTestRelay,
+  createAgent,
+  seedX402PaidTask,
+} from "./test-helpers.js";
 
 type Keypair = { publicKey: Uint8Array; privateKey: Uint8Array };
 
@@ -180,6 +186,7 @@ const round2Rows = (id: string): number =>
 async function appealedWorld(): Promise<{ w: World; id: string }> {
   const w = await settledWorld();
   const id = await file(w, "delegator");
+  closeEvidenceWindow(relay, id);
   const r1 = await resolve(id, { resolution: "overturned" });
   expect(r1.status).toBe(200);
   const ap = await appeal(w, id, "delegator");
