@@ -96,8 +96,10 @@ describe("conversation history egress gate", () => {
     for (const m of conv.matchAll(/summarizeConversation\(\s*([^,]+),/g)) {
       expect(["history", "this.egressHistory()"]).toContain(m[1]!.trim());
     }
+    // Summarization reads the filtered history, bounded to the newest
+    // messages within the model's budget (the bound only ever narrows it).
     expect(conv).toMatch(
-      /const history = this\.egressHistory\(\);\s*if \(history\.length < 2\) return null;/,
+      /const history = newestWithinBudget\(this\.egressHistory\(\), provider\.model\);\s*if \(history\.length < 2\) return null;/,
     );
     // The stored summary is derived content: it reaches a provider only
     // through the stamp-filtered view (interior-egress.ts).
