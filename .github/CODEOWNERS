@@ -39,6 +39,12 @@
 /scripts/check-coverage-config-present.ts @hakimlabs
 /scripts/check-codeowners-authority.ts @hakimlabs
 /scripts/lib/codeowners.ts @hakimlabs
+# The autonomy boundary (docs/proposals/repo-autonomy-v1.md): the T0/T1 classifier,
+# the autonomy-tier verdict, and its workflow (also under /.github/). Owned so a T0
+# change cannot move the boundary that decides what T0 is.
+/scripts/classify-autonomy-tier.ts @hakimlabs
+/scripts/autonomy-tier-verdict.ts @hakimlabs
+/.github/workflows/autonomy-tier.yml @hakimlabs
 # The wire contract (protocol primacy): the spec and the protocol types define what
 # every implementer must do, so a change here is constitutional (founder decision 2026-10-11).
 /spec/ @hakimlabs
