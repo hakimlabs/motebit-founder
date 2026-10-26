@@ -61,6 +61,28 @@ const TAMPERS = [
     red: T1("loosened dependency range in an unowned app"),
   },
   {
+    // The fixture's `.example` extension is unrecognised, so the fail-close
+    // would still catch it; the tamper also recognises the extension, which is
+    // exactly the later change the explicit rule exists to survive.
+    name: "exclusion 3: an env template is T1 only by the unrecognised-extension close",
+    edits: [
+      {
+        file: CLASSIFIER,
+        from: '        if (isEnvTemplatePath(p)) fire("env-template"',
+        to: '        if ((false as boolean) && isEnvTemplatePath(p)) fire("env-template"',
+      },
+      { file: CLASSIFIER, from: '  "kt",\n]);', to: '  "kt",\n  "example",\n]);' },
+    ],
+    red: T1("env template default flipped (services/relay/.env.example)"),
+  },
+  {
+    name: "self-expansion: a sub-directory CLAUDE.md is T0",
+    file: CLASSIFIER,
+    text: "        if (isAgentInstructionsPath(p))\n",
+    replacement: "        if ((false as boolean) && isAgentInstructionsPath(p))\n",
+    red: T1("sub-directory CLAUDE.md (packages/panels/CLAUDE.md)"),
+  },
+  {
     name: "exclusion 4: an added suppression directive is not caught",
     file: CLASSIFIER,
     text: "        if (sup.length > 0)\n",

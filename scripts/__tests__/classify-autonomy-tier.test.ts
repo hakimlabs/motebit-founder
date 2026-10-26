@@ -510,6 +510,42 @@ export const MUST_T1: Fixture[] = [
     codeowners: "!/docs/ @hakimlabs\n",
     expect: ["classifier-error"],
   },
+  // Lead decision: env templates are security posture, explicitly T1.
+  {
+    name: "env template default flipped (services/relay/.env.example)",
+    diff: modify(
+      "services/relay/.env.example",
+      ["MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=true"],
+      ["MOTEBIT_FEDERATION_REQUIRE_DISCOVER_SIGNATURE=false"],
+    ),
+    expect: ["env-template"],
+  },
+  {
+    name: "env file anywhere (config/relay.env)",
+    diff: modify("config/relay.env", ["REQUIRE_AUTH=1"], ["REQUIRE_AUTH=0"]),
+    expect: ["env-template"],
+  },
+  // Lead decision: agent instructions and doctrine are T1 (no self-expansion).
+  {
+    name: "sub-directory CLAUDE.md (packages/panels/CLAUDE.md)",
+    diff: modify("packages/panels/CLAUDE.md", ["Rule: state here."], ["Rule: anything goes."]),
+    expect: ["agent-instructions"],
+  },
+  {
+    name: "nested AGENTS.md",
+    diff: modify("apps/web/AGENTS.md", ["old"], ["new"]),
+    expect: ["agent-instructions"],
+  },
+  {
+    name: "DOCTRINE.md",
+    diff: modify("DOCTRINE.md", ["old"], ["new"]),
+    expect: ["agent-instructions"],
+  },
+  {
+    name: "a doctrine doc (docs/doctrine/**)",
+    diff: modify("docs/doctrine/agent-archetypes.md", ["The old sentence."], ["The new sentence."]),
+    expect: ["agent-instructions"],
+  },
   {
     name: "constitutional file (CODEOWNERS-owned)",
     diff: modify("CLAUDE.md", ["old"], ["new"]),
@@ -536,7 +572,7 @@ export const MUST_T0: { name: string; diff: string; files?: Files }[] = [
   {
     name: "docs-only change (docs/**/*.md, not owned)",
     diff: modify(
-      "docs/doctrine/agent-archetypes.md",
+      "docs/ops/agentic-lanes.md",
       ["The old sentence."],
       ["The new, clearer sentence."],
     ),
@@ -637,6 +673,7 @@ describe("coverage of the rule table", () => {
       "exclusion-3",
       "exclusion-4",
       "exclusion-5",
+      "self-expansion",
       "fail-closed",
     ];
     const tableCategories = new Set(Object.values(RULES).map((r) => r.category));

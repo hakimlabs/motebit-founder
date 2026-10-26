@@ -17,7 +17,10 @@
  *   exclusion-3   dependencies / toolchain: any package.json field outside a
  *                 small descriptive allowlist (dependencies, overrides,
  *                 packageManager, scripts, engines, pnpm, ... all count),
- *                 lockfiles, Cargo, .npmrc, .nvmrc, pnpm patches, Dockerfiles.
+ *                 lockfiles, Cargo, .npmrc, .nvmrc, pnpm patches, Dockerfiles;
+ *                 and environment templates (`.env*`, `*.env.example`, ...):
+ *                 their defaults are security posture, so they are T1 by an
+ *                 explicit rule, not only by the unrecognised-extension close.
  *   exclusion-4   enforcement itself: `scripts/check*`, `scripts/lib/**`, the
  *                 tamper / outcome / coverage machinery, hooks, lint-staged,
  *                 lint / type / test / format config, test setup files, a test
@@ -29,6 +32,10 @@
  *                 `.fails` / `skipIf` / `xit`..., a deleted test file, a new or
  *                 changed timeout / retry (a raise cannot be told from a new
  *                 value without a baseline, so any change counts).
+ *   self-expansion  agent instructions and doctrine: every `CLAUDE.md` /
+ *                 `AGENTS.md` anywhere, `DOCTRINE.md`, `docs/doctrine/**` (an
+ *                 agent editing its own instructions under T0 is the
+ *                 self-expansion the design forbids).
  *   fail-closed   a rename (both names are judged, and the rename itself is
  *                 T1), a deletion, a binary or unrecognised file type, a
  *                 submodule or symlink, an empty or unparseable diff, file
@@ -69,6 +76,7 @@ export type RuleCategory =
   | "exclusion-3"
   | "exclusion-4"
   | "exclusion-5"
+  | "self-expansion"
   | "fail-closed";
 
 /**
@@ -86,6 +94,10 @@ export const RULES = {
   "dependency-toolchain": {
     category: "exclusion-3",
     what: "a dependency, lockfile, package.json non-descriptive field or toolchain pin",
+  },
+  "env-template": {
+    category: "exclusion-3",
+    what: "an environment template (.env*, *.env.example): its defaults are security posture",
   },
   "enforcement-config": {
     category: "exclusion-4",
@@ -105,6 +117,10 @@ export const RULES = {
   },
   "test-deleted": { category: "exclusion-5", what: "a deleted test file" },
   "test-timeout-retry": { category: "exclusion-5", what: "a new or changed test timeout / retry" },
+  "agent-instructions": {
+    category: "self-expansion",
+    what: "agent instructions or doctrine (CLAUDE.md / AGENTS.md anywhere, DOCTRINE.md, docs/doctrine/)",
+  },
   rename: { category: "fail-closed", what: "a renamed path" },
   deletion: { category: "fail-closed", what: "a deleted file" },
   binary: { category: "fail-closed", what: "a binary file" },
@@ -417,6 +433,27 @@ const DEPENDENCY_BASENAMES = new Set([
   "gradle.properties",
 ]);
 
+/** Environment templates anywhere: `.env`, `.env.example`, `relay.env.example`, `env.sample`. */
+export function isEnvTemplatePath(path: string): boolean {
+  const b = base(path);
+  return (
+    /^\.env(\.|$)/.test(b) ||
+    /\.env(\.[^/]*)?$/.test(b) ||
+    /^env\.(example|sample|template)$/.test(b)
+  );
+}
+
+/** Agent instructions and doctrine: what tells an agent how to act. */
+export function isAgentInstructionsPath(path: string): boolean {
+  const b = base(path);
+  return (
+    b === "CLAUDE.md" ||
+    b === "AGENTS.md" ||
+    path === "DOCTRINE.md" ||
+    path.startsWith("docs/doctrine/")
+  );
+}
+
 export function isDependencyPath(path: string): boolean {
   const b = base(path);
   return (
@@ -628,6 +665,9 @@ export function classifyDiff(input: ClassifyInput): Classification {
         if (anc !== null) fire("owned-subject", p, `under owned directory ${anc}/`);
         if (p.startsWith(".github/")) fire("github-config", p, "under .github/");
         if (isDependencyPath(p)) fire("dependency-toolchain", p, "dependency / toolchain file");
+        if (isEnvTemplatePath(p)) fire("env-template", p, "environment template");
+        if (isAgentInstructionsPath(p))
+          fire("agent-instructions", p, "agent instructions / doctrine");
         if (isEnforcementPath(p)) fire("enforcement-config", p, "enforcement code or config");
         const ext = extensionOf(p);
         if (ext === null || !RECOGNISED_EXTENSIONS.has(ext)) {
