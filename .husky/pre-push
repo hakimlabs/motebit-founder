@@ -17,6 +17,18 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # worktree") and scripts/__tests__/git-env-isolation.harness.ts --hook.
   unset $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/\1/p') # git-env-scrub
 
+  # --- One verification run per machine (#1147) ------------------------------
+  # Two full runs on one Mac time each other's wall-clock-bounded tests out:
+  # on 2026-10-25 three pushes failed that way, each a 15-35 minute rerun. So
+  # the hook re-runs itself, exactly as husky ran it (`sh -e`, same args, same
+  # stdin), under the machine-wide lock in scripts/lib/verify-lock.ts: a
+  # second push WAITS for the first instead of competing with it. The
+  # re-run sees MOTEBIT_VERIFY_LOCK_PID and passes straight through. It adds
+  # no phase and runs nothing CI does not; check-prepush-subset pins the line.
+  if [ -z "$MOTEBIT_VERIFY_LOCK_PID" ]; then
+    exec tsx scripts/with-verify-lock.ts pre-push -- sh -e .husky/pre-push "$@"
+  fi
+
   # --- What this hook is (and is not) --------------------------------------
   # A FAST gate by SCOPE, not the authority. CI (`.github/workflows/ci.yml`,
   # plus the merge queue) is the authority and runs everything unfiltered;

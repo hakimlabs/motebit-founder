@@ -180,6 +180,11 @@ const EXACT_COMMANDS = new Set([
   "wc -l",
   "tr -d ' '",
   "head -n 1",
+  // The machine-wide verification lock (#1147): the hook re-runs ITSELF,
+  // unchanged, under scripts/lib/verify-lock.ts, so it adds no phase and runs
+  // nothing CI does not. Guarded by the re-entry variable it sets.
+  '[ -z "$MOTEBIT_VERIFY_LOCK_PID" ]',
+  'exec tsx scripts/with-verify-lock.ts pre-push -- sh -e .husky/pre-push "$@"',
 ]);
 
 /** The hook's top level: the $CI short-circuit, then `if <tag guard>; then <body> fi`. */
