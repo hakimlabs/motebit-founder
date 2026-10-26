@@ -14,10 +14,12 @@ import type { TamperEntry } from "../lib/tamper-runner";
 import {
   BREAK_SUM,
   COMMENT_ONLY,
+  FIXED_PORT_FLOOR,
   FX,
   SUM_FILE,
   SUM_TEST,
   drive,
+  ephemeralPortRange,
   setupFixture,
   snapshot,
   teardownFixture,
@@ -227,9 +229,30 @@ describe("tamper-runner isolation", () => {
       ],
       2,
     );
-    expect(verdicts(d)).toEqual(["RED", "GREEN"]);
+    expect(verdicts(d), d.out).toEqual(["RED", "GREEN"]);
     expect(new Set(d.summary.results.map((r) => r.slot)).size).toBe(1);
     expect(d.code).toBe(1);
+  });
+
+  it("C1: the fixed port is one the kernel never hands out by itself (below the ephemeral range)", async () => {
+    // The port is bound only during each run, so between runs any process's
+    // listen(0) or outgoing connection could be given an ephemeral one (#1147).
+    const [lo, hi] = ephemeralPortRange();
+    expect(fx!.port).toBeGreaterThanOrEqual(FIXED_PORT_FLOOR);
+    expect(fx!.port).toBeLessThan(lo);
+    // The range read is the kernel's: what listen(0) hands out falls inside it.
+    for (let i = 0; i < 20; i++) {
+      const s = createServer();
+      const got = await new Promise<number>((r) =>
+        s.listen(0, "127.0.0.1", () => {
+          const a = s.address();
+          r(typeof a === "object" && a != null ? a.port : -1);
+        }),
+      );
+      await new Promise((r) => s.close(r));
+      expect(got).toBeGreaterThanOrEqual(lo);
+      expect(got).toBeLessThanOrEqual(hi);
+    }
   });
 
   it("C1: a fixed port held outside the run aborts it at the baseline, never a false RED", async () => {
