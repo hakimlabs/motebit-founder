@@ -198,7 +198,7 @@ export function getDueOrchestrations(
  * UNIQUE (dispute_id, round)` both catch a concurrent finalize. One writer
  * wins; the other rolls back and writes nothing. Returns `{ persisted: true }`
  * when this call committed, else `{ persisted: false, standing }`: the record
- * that stands (the dispute's state now, and its round-1 resolution if any).
+ * that stands (the dispute's state now, and its governing resolution if any: round 2 when one was committed, else round 1).
  * A caller never reports its own verdict when `persisted` is false.
  */
 export interface FinalizeArgs {
@@ -218,7 +218,7 @@ export interface FinalizeDeps {
   relayIdentity: RelayIdentity;
 }
 
-/** A round-1 resolution as it stands in `relay_dispute_resolutions`. */
+/** A committed resolution as it stands in `relay_dispute_resolutions`. */
 export interface StandingResolution {
   round: number;
   resolution: DisputeOutcome;
@@ -233,7 +233,7 @@ export interface StandingResolution {
 export interface StandingRecord {
   /** The dispute's state now; null if the row is gone. */
   state: string | null;
-  /** Its round-1 resolution, if one was committed. */
+  /** Its governing resolution (the highest committed round, as `/resolve`'s cached path reads it), if any. */
   resolution: StandingResolution | null;
 }
 
@@ -241,7 +241,7 @@ export type FinalizeResult =
   | { persisted: true; signature: string }
   | { persisted: false; signature: string; standing: StandingRecord };
 
-/** Read the standing record (state + round-1 resolution) for a dispute. */
+/** Read the standing record (state + governing resolution) for a dispute. */
 export function readStandingRecord(db: DatabaseDriver, disputeId: string): StandingRecord {
   const dispute = db
     .prepare("SELECT state FROM relay_disputes WHERE dispute_id = ?")
@@ -249,7 +249,7 @@ export function readStandingRecord(db: DatabaseDriver, disputeId: string): Stand
   const row = db
     .prepare(
       `SELECT round, resolution, rationale, fund_action, split_ratio, adjudicator_votes, resolved_at
-       FROM relay_dispute_resolutions WHERE dispute_id = ? AND round = 1`,
+       FROM relay_dispute_resolutions WHERE dispute_id = ? ORDER BY round DESC LIMIT 1`,
     )
     .get(disputeId) as
     | (Omit<StandingResolution, "adjudicator_votes"> & { adjudicator_votes: string | null })

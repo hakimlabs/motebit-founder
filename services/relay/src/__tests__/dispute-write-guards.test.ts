@@ -450,6 +450,33 @@ describe("the deferred worker's round 2 commits through commitRound2Verdict", ()
     expect(refund?.amount).toBe(100000);
   });
 
+  it("a round 2 that timed out below quorum writes no round-2 row and moves no money", async () => {
+    const w = await appealedWithRound2Row();
+    // Past the §6.6 deadline, with every peer down: a sub-quorum timed_out.
+    db()
+      .prepare(
+        "UPDATE relay_dispute_orchestrations SET deadline_at = ? WHERE dispute_id = ? AND round = 2",
+      )
+      .run(w.now - 1, w.disputeId);
+    const out = await runDeferredOrchestrationCycle({
+      db: db(),
+      relayIdentity: await relaySigner(),
+      fetchImpl: (async () => {
+        throw new Error("peer down");
+      }) as unknown as typeof fetch,
+      nowMs: () => w.now,
+    });
+    expect(out).toMatchObject({ processed: 1, timed_out: 1 });
+    expect(resolutionRows(w.disputeId)).toEqual([{ round: 1, resolution: "upheld" }]);
+    expect(disputeRow(w.disputeId)).toMatchObject({ state: "appealed", final_at: null });
+    const credits = db()
+      .prepare(
+        "SELECT COUNT(*) AS n FROM relay_transactions WHERE type = 'settlement_credit' AND reference_id = ?",
+      )
+      .get(w.disputeId) as { n: number };
+    expect(credits.n).toBe(0);
+  });
+
   it("a round-2 row for a dispute no longer appealed writes nothing", async () => {
     const w = await appealedWithRound2Row();
     db()
@@ -525,5 +552,94 @@ describe("the GET expiry writer commits only from opened", () => {
     expect(res.status, await res.clone().text()).toBe(200);
     expect(((await res.json()) as { state: string }).state).toBe("expired");
     expect(disputeRow(id).state).toBe("expired");
+  });
+});
+
+interface ResolvedBody {
+  state: string;
+  resolution: string;
+}
+
+describe("single-relay /resolve: 200 only for the verdict that is recorded", () => {
+  it("a re-POST of a different verdict after commit is 409 with the standing record", async () => {
+    relay = await createTestRelay();
+    const id = insertDispute("evidence");
+    expect((await resolveReq(id, "upheld")).status).toBe(200);
+    const res = await resolveReq(id, "overturned");
+    expect(res.status, await res.clone().text()).toBe(409);
+    expect((await res.json()) as NotCommittedBody).toMatchObject({
+      code: "DISPUTE_RESOLUTION_NOT_COMMITTED",
+      state: "resolved",
+      resolution: { round: 1, resolution: "upheld" },
+    });
+    expect(resolutionRows(id)).toEqual([{ round: 1, resolution: "upheld" }]);
+  });
+
+  it("a re-POST of the same verdict after commit is an idempotent 200", async () => {
+    relay = await createTestRelay();
+    const id = insertDispute("evidence");
+    expect((await resolveReq(id, "upheld")).status).toBe(200);
+    const res = await resolveReq(id, "upheld");
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect((await res.json()) as ResolvedBody).toMatchObject({ resolution: "upheld" });
+    expect(resolutionRows(id)).toEqual([{ round: 1, resolution: "upheld" }]);
+  });
+
+  it("two concurrent resolves with different verdicts: the one recorded answers 200, the other 409 with the standing record", async () => {
+    relay = await createTestRelay();
+    const id = insertDispute("evidence");
+    const responses = await Promise.all([resolveReq(id, "upheld"), resolveReq(id, "overturned")]);
+    const statuses = responses.map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 409]);
+    const rows = resolutionRows(id);
+    expect(rows).toHaveLength(1);
+    const ok = responses.find((r) => r.status === 200)!;
+    const refused = responses.find((r) => r.status === 409)!;
+    expect(((await ok.json()) as ResolvedBody).resolution).toBe(rows[0]!.resolution);
+    expect((await refused.json()) as NotCommittedBody).toMatchObject({
+      code: "DISPUTE_RESOLUTION_NOT_COMMITTED",
+      resolution: { round: 1, resolution: rows[0]!.resolution },
+    });
+  });
+
+  it("two concurrent resolves with the same verdict both answer 200", async () => {
+    relay = await createTestRelay();
+    const id = insertDispute("evidence");
+    const responses = await Promise.all([resolveReq(id, "upheld"), resolveReq(id, "upheld")]);
+    expect(responses.map((r) => r.status)).toEqual([200, 200]);
+    expect(resolutionRows(id)).toEqual([{ round: 1, resolution: "upheld" }]);
+  });
+
+  it("a lost race whose standing verdict is the caller's own is an idempotent 200", async () => {
+    relay = await createTestRelay();
+    const id = insertDispute("evidence");
+    signHook.once = async () => {
+      const other = await finalizeFederationResolution(round1Args(id, "upheld"), await deps());
+      expect(other.persisted).toBe(true);
+    };
+    const res = await resolveReq(id, "upheld");
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(resolutionRows(id)).toEqual([{ round: 1, resolution: "upheld" }]);
+  });
+});
+
+describe("the standing record is the governing resolution", () => {
+  it("a final dispute whose round 2 governs reports round 2 when a round-1 commit does not land", async () => {
+    relay = await createTestRelay();
+    const id = insertDispute("final");
+    const insert = db().prepare(
+      `INSERT INTO relay_dispute_resolutions
+         (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio,
+          adjudicator, adjudicator_votes, resolved_at, signature, is_appeal)
+       VALUES (?, ?, ?, ?, 'r', ?, ?, 'relay', '[]', ?, 'sig', ?)`,
+    );
+    insert.run(`res-1-${id}`, id, 1, "upheld", "refund_to_delegator", 0, Date.now() - 2, 0);
+    insert.run(`res-2-${id}`, id, 2, "overturned", "release_to_worker", 1, Date.now() - 1, 1);
+    const out = await finalizeFederationResolution(round1Args(id, "split"), await deps());
+    expect(out.persisted).toBe(false);
+    expect(out).toMatchObject({
+      standing: { state: "final", resolution: { round: 2, resolution: "overturned" } },
+    });
+    expect(disputeRow(id).state).toBe("final");
   });
 });

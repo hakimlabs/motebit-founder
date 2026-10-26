@@ -18,7 +18,13 @@
  *   - the worker's round-2 re-point removed — a due round-2 row goes through
  *     the round-1 writer and the appeal's fund action never runs;
  *   - the GET expiry writer's `opened` guard removed — a dispute another
- *     process moved to `evidence` is expired anyway.
+ *     process moved to `evidence` is expired anyway;
+ *   - the worker commits a timed-out round 2 — a below-quorum 0.5 split
+ *     writes a round-2 row and moves money over a signed round-1 verdict;
+ *   - single-relay outcomes not reconciled with the caller's body, and the
+ *     cached path's verdict comparison removed — a different verdict is
+ *     answered 200 with someone else's;
+ *   - the standing record read at round 1 — a round 2 that governs is hidden.
  *
  * Exit 1 if any tamper stays green or cannot apply.
  *
@@ -57,6 +63,8 @@ const FINALIZE = "finalizeFederationResolution: round 1 commits only from eviden
 const RESOLVE = "/resolve answers 409 with the standing record when its verdict did not commit";
 const WORKER = "the deferred worker's round 2 commits through commitRound2Verdict";
 const EXPIRE = "the GET expiry writer commits only from opened";
+const SINGLE = "single-relay /resolve: 200 only for the verdict that is recorded";
+const GOVERNING = "the standing record is the governing resolution";
 
 const STATE_GUARD = {
   file: ORCH,
@@ -156,6 +164,58 @@ const TAMPERS = [
     ],
     ...only(
       `${EXPIRE} an opened dispute past its window that another process moved to evidence is not expired, and GET reports evidence`,
+    ),
+  },
+  {
+    name: "the worker commits a timed-out (below-quorum) round 2",
+    edits: [
+      {
+        file: DISPUTES,
+        from: '          if (outcome.state === "ready") {\n            const full = getDispute(db, item.dispute_id);',
+        to: '          if ((true as boolean) || outcome.state === "ready") {\n            const full = getDispute(db, item.dispute_id);',
+      },
+    ],
+    ...only(
+      `${WORKER} a round 2 that timed out below quorum writes no round-2 row and moves no money`,
+    ),
+  },
+  {
+    name: "single-relay outcomes not reconciled with the caller's body (in-process collapse)",
+    edits: [
+      {
+        file: DISPUTES,
+        from: "      relayIsParty ? outcome : reconcileSingleRelayOutcome(db, disputeId, body, filerRole, outcome);",
+        to: "      (true as boolean) || relayIsParty\n        ? outcome\n        : reconcileSingleRelayOutcome(db, disputeId, body, filerRole, outcome);",
+      },
+    ],
+    ...only(
+      `${SINGLE} two concurrent resolves with different verdicts: the one recorded answers 200, the other 409 with the standing record`,
+    ),
+  },
+  {
+    name: "the cached path answers any single-relay body with the standing verdict",
+    edits: [
+      {
+        file: DISPUTES,
+        from: "      if (!relayIsParty && !sameSingleRelayVerdict(body, filerRole, existing)) {",
+        to: "      if ((false as boolean) && !relayIsParty && !sameSingleRelayVerdict(body, filerRole, existing)) {",
+      },
+    ],
+    ...only(
+      `${SINGLE} a re-POST of a different verdict after commit is 409 with the standing record`,
+    ),
+  },
+  {
+    name: "the standing record reports round 1 instead of the governing round",
+    edits: [
+      {
+        file: ORCH,
+        from: "WHERE dispute_id = ? ORDER BY round DESC LIMIT 1`,",
+        to: "WHERE dispute_id = ? AND round = 1`,",
+      },
+    ],
+    ...only(
+      `${GOVERNING} a final dispute whose round 2 governs reports round 2 when a round-1 commit does not land`,
     ),
   },
 ];

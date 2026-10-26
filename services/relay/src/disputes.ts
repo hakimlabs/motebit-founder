@@ -52,6 +52,7 @@ import {
   markOrchestrationTimedOut,
   ORCHESTRATION_WORKER_INTERVAL_MS,
   recordOrchestrationAttempt,
+  readStandingRecord,
   type FinalizeResult,
   type OrchestrationRow,
   type StandingRecord,
@@ -599,7 +600,7 @@ function outcomeToResponse(c: Context, disputeId: string, outcome: ResolveOutcom
   if (outcome.kind === "not_committed") {
     // dispute-v1 §6.6: a relay never reports a verdict it did not commit.
     // The body carries the record that stands: the dispute's state now and
-    // its round-1 resolution (null when none was committed).
+    // its governing resolution (null when none was committed).
     return c.json(
       {
         error:
@@ -848,6 +849,53 @@ export function deriveSingleRelayFundAction(
     };
   }
   return derived;
+}
+
+/**
+ * Whether an operator's single-relay `/resolve` body is the same verdict as
+ * `committed`: the same outcome, and the same fund action and split ratio
+ * once derived from the §7.2 table (#1157). A body the table refuses is
+ * never the same verdict.
+ */
+function sameSingleRelayVerdict(
+  body: { resolution?: unknown; fund_action?: unknown; split_ratio?: unknown },
+  filerRole: FilerRole | null,
+  committed: { resolution: string; fund_action: string; split_ratio: number },
+): boolean {
+  const money = deriveSingleRelayFundAction(body, filerRole);
+  if ("refused" in money) return false;
+  return (
+    body.resolution === committed.resolution &&
+    money.fund_action === committed.fund_action &&
+    money.split_ratio === committed.split_ratio
+  );
+}
+
+/**
+ * dispute-v1 §6.6 on the single-relay path: `200` means the caller's verdict
+ * is the one recorded. A `resolved` outcome another caller produced (the
+ * in-process collapse) answers this caller only if its body is the same
+ * verdict; otherwise it did not commit. A `not_committed` outcome whose
+ * standing verdict IS this caller's is an idempotent replay.
+ */
+function reconcileSingleRelayOutcome(
+  db: DatabaseDriver,
+  disputeId: string,
+  body: { resolution?: unknown; fund_action?: unknown; split_ratio?: unknown },
+  filerRole: FilerRole | null,
+  outcome: ResolveOutcome,
+): ResolveOutcome {
+  if (outcome.kind === "resolved" && !sameSingleRelayVerdict(body, filerRole, outcome.data)) {
+    return { kind: "not_committed", standing: readStandingRecord(db, disputeId) };
+  }
+  if (
+    outcome.kind === "not_committed" &&
+    outcome.standing.resolution !== null &&
+    sameSingleRelayVerdict(body, filerRole, outcome.standing.resolution)
+  ) {
+    return { kind: "resolved", data: outcome.standing.resolution };
+  }
+  return outcome;
 }
 
 /**
@@ -1296,9 +1344,22 @@ export async function runDeferredOrchestrationCycle(deps: {
           // `appealed` writes nothing (409, logged below); a refused or
           // frozen fund action keeps the signed round-2 row and is retried
           // on read (`tryFinalizePersistedRound2`).
-          const full = getDispute(db, item.dispute_id);
-          if (!full) throw new Error(`dispute ${item.dispute_id} vanished mid-cycle`);
-          await commitRound2Verdict(db, deps.relayIdentity, full, outcome.result);
+          //
+          // Only a quorum verdict commits. A round 2 that timed out below
+          // quorum writes nothing — no round-2 row, no money, the dispute
+          // stays `appealed` — so a §6.6 0.5 split never overrides a signed
+          // round-1 verdict (design M1: a round-2 fallback row is void; the
+          // appeal lapse, PR 10, lets round 1 govern).
+          if (outcome.state === "ready") {
+            const full = getDispute(db, item.dispute_id);
+            if (!full) throw new Error(`dispute ${item.dispute_id} vanished mid-cycle`);
+            await commitRound2Verdict(db, deps.relayIdentity, full, outcome.result);
+          } else {
+            logger.warn("dispute.orchestration.round_2_timed_out_no_verdict", {
+              disputeId: item.dispute_id,
+              validVoteCount: outcome.result.adjudicator_votes.length,
+            });
+          }
         } else {
           const committed = await finalizeFederationResolution(
             {
@@ -1927,24 +1988,21 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     //    Handles re-call after successful resolve + the second-caller-on-
     //    crash-recovery case (first caller completed; second caller sees
     //    the persisted resolution).
-    const existing = db
-      .prepare(
-        // ORDER BY round DESC LIMIT 1: if round 2 exists (post-appeal),
-        // return it; else return round 1. /resolve cached-path always
-        // reflects the latest signed verdict.
-        "SELECT resolution, rationale, fund_action, split_ratio, adjudicator_votes, resolved_at FROM relay_dispute_resolutions WHERE dispute_id = ? ORDER BY round DESC LIMIT 1",
-      )
-      .get(disputeId) as
-      | {
-          resolution: DisputeOutcome;
-          rationale: string;
-          fund_action: DisputeFundAction;
-          split_ratio: number;
-          adjudicator_votes: string;
-          resolved_at: number;
-        }
-      | undefined;
+    //    The governing resolution is the highest committed round (round 2
+    //    if one exists, else round 1). On the single-relay path the
+    //    operator's body IS a verdict: a re-POST of the same verdict is an
+    //    idempotent replay (200); a different one did not commit (409 with
+    //    the standing record, dispute-v1 §6.6). The federation path's body
+    //    is not a verdict (the orchestrator decides), so it always replays.
+    const filerRole = (dispute.filer_role as FilerRole | null) ?? null;
+    const reconcile = (outcome: ResolveOutcome): ResolveOutcome =>
+      relayIsParty ? outcome : reconcileSingleRelayOutcome(db, disputeId, body, filerRole, outcome);
+    const standingNow = readStandingRecord(db, disputeId);
+    const existing = standingNow.resolution;
     if (existing) {
+      if (!relayIsParty && !sameSingleRelayVerdict(body, filerRole, existing)) {
+        return outcomeToResponse(c, disputeId, { kind: "not_committed", standing: standingNow });
+      }
       return c.json({
         ok: true,
         dispute_id: disputeId,
@@ -1953,7 +2011,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
         fund_action: existing.fund_action,
         split_ratio: existing.split_ratio,
         resolved_at: existing.resolved_at,
-        adjudicator_votes: JSON.parse(existing.adjudicator_votes) as AdjudicatorVote[],
+        adjudicator_votes: existing.adjudicator_votes,
       });
     }
 
@@ -1991,8 +2049,11 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // 2. Per-dispute advisory lock. Collapse concurrent calls.
     const inFlight = resolveLocks.get(disputeId);
     if (inFlight) {
+      // The collapsed caller's own body is compared with what the first
+      // caller committed: on the single-relay path a different verdict is
+      // 409, never the other caller's 200.
       const outcome = await inFlight;
-      return outcomeToResponse(c, disputeId, outcome);
+      return outcomeToResponse(c, disputeId, reconcile(outcome));
     }
 
     const isFederationPath =
@@ -2135,7 +2196,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     resolveLocks.set(disputeId, resolvePromise);
     try {
       const outcome = await resolvePromise;
-      return outcomeToResponse(c, disputeId, outcome);
+      return outcomeToResponse(c, disputeId, reconcile(outcome));
     } finally {
       resolveLocks.delete(disputeId);
     }
