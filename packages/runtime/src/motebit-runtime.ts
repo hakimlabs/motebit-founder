@@ -1446,7 +1446,11 @@ export class MotebitRuntime {
   ): ConstructorParameters<typeof ConversationManager>[0] {
     return {
       motebitId: this.motebitId,
-      maxHistory: config.maxConversationHistory ?? 40,
+      // 100 messages: room for the 64k-token history budget on ordinary chat,
+      // and headroom under Motebit Cloud's 200-message request limit
+      // (services/proxy/src/validation.ts) for the current message and every
+      // tool round of the turn.
+      maxHistory: config.maxConversationHistory ?? 100,
       summarizeAfterMessages: config.summarizeAfterMessages ?? 20,
       store: this.conversationStore,
       getProvider: () => this.provider,

@@ -513,6 +513,44 @@ export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
   proxy: "2026-10-31",
 };
 
+// === Conversation history budget ===
+//
+// How much conversation history one turn may carry, by model. Born from the
+// intelligence-parity bench (run 40198849734, Opus 5.5): a flat 8,000-token
+// budget, set for small local windows, cut a 7,900-token conversation to
+// ~2,700 tokens on a 1M-token model, and the answer that needed turn 1 scored
+// 4.63 against 9.25 with the full history. The vendor apps keep the whole
+// conversation; a motebit forgot its start.
+//
+// The big budget goes only to vendors whose current models all carry windows
+// far above it. Every other vendor, local servers and unknown ids keep the
+// conservative one: overflowing a small local window truncates silently,
+// which is worse than trimming honestly. Legacy OpenAI ids (`gpt-3.5*`,
+// `gpt-4`, `gpt-4-*`: 8k-16k windows) stay conservative. Motebit Cloud's
+// `auto` takes the large budget: every model the proxy can route it to has a
+// window of 128k or more. 64k, not the full window: Motebit
+// Cloud meters the same ids against a balance that starts at a $0.10 credit,
+// and the turn re-sends its history every round.
+
+/** History tokens a turn may carry on a large-window vendor. */
+export const LARGE_WINDOW_HISTORY_TOKENS = 64_000;
+
+/** History tokens a turn may carry on any other model. */
+export const DEFAULT_HISTORY_TOKENS = 8_000;
+
+/** The history budget for `model`: large for Anthropic, current OpenAI and
+ *  Google ids and Cloud `auto`, conservative for everything else (and for no
+ *  model). */
+export function historyTokenBudget(model: string | null | undefined): number {
+  if (model == null || model.trim() === "") return DEFAULT_HISTORY_TOKENS;
+  if (model === MOTEBIT_CLOUD_AUTO_MODEL) return LARGE_WINDOW_HISTORY_TOKENS;
+  if (/^gpt-(?:3\.5|4(?:$|-\d|-32k))/i.test(model.trim())) return DEFAULT_HISTORY_TOKENS;
+  const vendor = modelVendorHint(model);
+  return vendor === "anthropic" || vendor === "openai" || vendor === "google"
+    ? LARGE_WINDOW_HISTORY_TOKENS
+    : DEFAULT_HISTORY_TOKENS;
+}
+
 // === Anthropic picker (#654) ===
 //
 // The curated rows every surface's Anthropic model picker renders. Born

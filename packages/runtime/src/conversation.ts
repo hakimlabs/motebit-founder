@@ -12,7 +12,7 @@ import type {
   SensitivityCleared,
   SensitivityGateEntry,
 } from "@motebit/sdk";
-import { SensitivityLevel, maxSensitivity } from "@motebit/sdk";
+import { SensitivityLevel, historyTokenBudget, maxSensitivity } from "@motebit/sdk";
 import type { TurnPrincipal } from "./turn-principal.js";
 import type {
   StreamingProvider,
@@ -137,11 +137,24 @@ export interface ConversationDeps {
   getEffectiveSensitivity?: () => SensitivityLevel;
 }
 
-/** Default context window budget — conservative to fit most models. */
-const CONVERSATION_BUDGET: ContextBudget = {
-  maxTokens: 8000,
-  reserveForResponse: 1024,
-};
+/** The history budget for the provider's current model (read per turn: the
+ *  model can change between turns). See `historyTokenBudget` in the sdk. */
+function conversationBudget(model: string | null | undefined): ContextBudget {
+  return { maxTokens: historyTokenBudget(model), reserveForResponse: 1024 };
+}
+
+/** The newest messages of `history` that fit the model's budget, without the
+ *  trim note: the input one summarization pass may carry. Anything older is
+ *  already folded into the stored summary the pass also receives. */
+function newestWithinBudget(
+  history: ConversationMessage[],
+  model: string | null | undefined,
+): ConversationMessage[] {
+  const kept = trimConversation(history, conversationBudget(model), null);
+  // An untrimmed result starts with the first message itself; a trimmed one
+  // starts with the synthetic note.
+  return kept[0] === history[0] ? kept : kept.slice(1);
+}
 
 /** The conversation as one turn sees it — see {@link ConversationManager.forTurn}. */
 export interface TurnConversation {
@@ -334,7 +347,7 @@ export class ConversationManager {
   trimmed(): ConversationMessage[] {
     return trimConversation(
       this.egressHistory(),
-      CONVERSATION_BUDGET,
+      conversationBudget(this.deps.getProvider()?.model),
       this.egressSummary()?.text ?? null,
     );
   }
@@ -473,7 +486,7 @@ export class ConversationManager {
     const { store } = this.deps;
     if (provider == null || store == null || this.currentId == null || this.currentId === "")
       return null;
-    const history = this.egressHistory();
+    const history = newestWithinBudget(this.egressHistory(), provider.model);
     if (history.length < 2) return null;
     const sendTier = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
     const existing = this.egressSummary();

@@ -298,6 +298,9 @@ export const DEFAULT_GOVERNANCE_CONFIG: GovernanceConfig;
 export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
 
 // @public
+export const DEFAULT_HISTORY_TOKENS = 8000;
+
+// @public
 export const DEFAULT_LOCAL_SERVER_MODEL = "qwen3";
 
 // @public
@@ -464,6 +467,9 @@ export const GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1";
 export const GROQ_MODELS: readonly ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
 
 // @public
+export function historyTokenBudget(model: string | null | undefined): number;
+
+// @public
 export function inferenceIsFreeToUser(mode: ProviderMode): boolean;
 
 // @public (undocumented)
@@ -489,6 +495,9 @@ export function isLocalServerUrl(url: string | undefined | null): boolean;
 
 // @public
 export function isPublicAddress(address: string): boolean;
+
+// @public
+export const LARGE_WINDOW_HISTORY_TOKENS = 64000;
 
 // @public (undocumented)
 export interface LightingSpec {
