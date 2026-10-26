@@ -17,7 +17,14 @@ So the tiers already exist. They only lack an approver that is not the founder.
 
 **T0, autonomous:** a PR whose every changed path is **unowned** in `CODEOWNERS` **and** outside the T0 exclusions below. A new machine user, `motebit-reviewer`, with **write** access (not a code owner, never in `CODEOWNERS`), approves and enqueues it when all of the following hold.
 
-**T0 is an allowlist, deny by default (revision 3).** A cold review of the first classifier built 16 diffs that a denylist labelled T0 while weakening enforcement. Examples: editing a cold reviewer's own prompt; weakening a money-path test through a template-literal import or an unowned barrel; `it["skip"]`; a vitest setup stub that redefines `toBe`; a release script that runs with publish rights. A list of dangerous things always misses one. So T0 is a **small closed allowlist** of inert paths: `docs/**/*.md` excluding `docs/doctrine/`, `docs/proposals/`, `docs/ops/`, `docs/design/` and `docs/drift-defenses.md`; `apps/docs/content/**/*.{md,mdx}`; `scripts/bench/**/*.json`. Each changed file must be a plain added or modified text file.
+**T0 is an allowlist, deny by default (revision 3).** A cold review of the first classifier built 16 diffs that a denylist labelled T0 while weakening enforcement. Examples: editing a cold reviewer's own prompt; weakening a money-path test through a template-literal import or an unowned barrel; `it["skip"]`; a vitest setup stub that redefines `toBe`; a release script that runs with publish rights. A list of dangerous things always misses one. So T0 is a **small closed allowlist** of inert paths: `docs/**/*.md` excluding `docs/doctrine/`, `docs/proposals/`, `docs/ops/`, `docs/design/`, `docs/operator/`, `docs/drift-defenses.md`, and any agent-instruction name (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `SKILL.md`), with exclusions matched case-insensitively; plus `scripts/bench/**/*.json`.
+
+**Docs-site MDX is not inert, and is not on the list.** A second cold review proved two separate ways it runs code:
+
+- `check-docs-quickstart-runs` executes a TypeScript block from `quickstart.mdx`, with CI's cache secrets in the environment;
+- fumadocs evaluates MDX `import`, `export` and JSX during `next build`.
+
+"Inert" is a property of how a file is **consumed**, not of its extension, so every allowlisted path needs a traced consumer that neither executes nor evaluates it. Each changed file must be a plain added or modified text file.
 
 Everything else is T1, including every test change and every changeset. Widening the allowlist is itself a T1 change to an owned file (the classifier), so autonomy can only grow by a founder-approved edit. The exclusions below remain as **explanations** of why those paths are not on the allowlist; the decision is the allowlist.
 
