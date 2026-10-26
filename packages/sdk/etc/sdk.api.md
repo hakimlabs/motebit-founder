@@ -72,7 +72,7 @@ export interface AIResponse {
 export const ANTHROPIC_CANONICAL_URL = "https://api.anthropic.com";
 
 // @public
-export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-opus-5-5", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
+export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-opus-5-5", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
 
 // @public
 export const ANTHROPIC_PICKER: readonly AnthropicPickerOption[];
@@ -280,7 +280,7 @@ export const DEEPSEEK_CANONICAL_URL = "https://api.deepseek.com";
 export const DEEPSEEK_MODELS: readonly ["deepseek-chat"];
 
 // @public
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
 
 // @public
 export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig;
@@ -307,7 +307,7 @@ export const DEFAULT_MOTEBIT_CLOUD_URL = "https://api.motebit.com";
 export const DEFAULT_OLLAMA_MODEL = "qwen3";
 
 // @public
-export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
+export const DEFAULT_OPENAI_MODEL = "gpt-5.4";
 
 // @public
 export const DEFAULT_PIXEL_CONSENT: PixelConsentState;

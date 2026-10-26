@@ -40,6 +40,7 @@ export const PRICES_USD_PER_MTOK: Readonly<Record<string, ModelPrice>> = {
   "claude-sonnet-5-5": { input: 2, output: 10, cache_read: 0.2 },
   "claude-sonnet-5": { input: 2, output: 10, cache_read: 0.2 },
   "claude-sonnet-4-6": { input: 3, output: 15, cache_read: 0.3 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cache_read: 0.01 },
   "claude-haiku-4-5": { input: 1, output: 5, cache_read: 0.1 },
 };
 
