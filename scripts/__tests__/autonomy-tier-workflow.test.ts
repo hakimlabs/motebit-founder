@@ -153,10 +153,16 @@ describe("the autonomy-tier workflow's pull_request_target safety", () => {
     }
   });
 
-  it("nothing but the head checkout's own path names subject/ (no step input or env from the head)", () => {
-    // Every string in the job except run scripts (which only pass the path
-    // as an argument to the trusted script, and run in trusted/) and the one
-    // exception: `with.path` of the head checkout step itself.
+  it("nothing in the whole workflow names subject/ but the head checkout's path and the verdict's --subject argument", () => {
+    // Every string and key in the WHOLE parsed workflow (top-level env and
+    // defaults, the job, every step, every run body), with exactly two
+    // exceptions matched by step identity: `with.path` of the head checkout
+    // step, and the one `--subject "$GITHUB_WORKSPACE/subject"` argument of
+    // the verdict step's run body.
+    const SUBJECT_ARG = '--subject "$GITHUB_WORKSPACE/subject"';
+    const verdictStep = job.steps.find((s) => s.run?.includes("scripts/autonomy-tier-verdict.ts"));
+    expect(verdictStep).toBeDefined();
+    expect(verdictStep!.run!.split(SUBJECT_ARG)).toHaveLength(2);
     const hits: string[] = [];
     const walk = (v: unknown, at: string): void => {
       if (typeof v === "string") {
@@ -164,23 +170,33 @@ describe("the autonomy-tier workflow's pull_request_target safety", () => {
       } else if (Array.isArray(v)) {
         v.forEach((x, i) => walk(x, `${at}[${i}]`));
       } else if (v !== null && typeof v === "object") {
-        for (const [k, x] of Object.entries(v)) walk(x, `${at}.${k}`);
+        for (const [k, x] of Object.entries(v)) {
+          if (/subject/i.test(k)) hits.push(`${at}.<key ${k}>`);
+          if (v === subject?.with && k === "path" && x === "subject") continue;
+          if (v === verdictStep && k === "run" && typeof x === "string") {
+            walk(x.replace(SUBJECT_ARG, ""), `${at}.run`);
+            continue;
+          }
+          walk(x, `${at}.${k}`);
+        }
       }
     };
-    for (const [k, v] of Object.entries(job)) if (k !== "steps") walk(v, `job.${k}`);
-    job.steps.forEach((s, i) => {
-      for (const [k, v] of Object.entries(s)) {
-        if (k === "run") continue;
-        if (k === "with" && s === subject) {
-          for (const [wk, wv] of Object.entries(v as Record<string, unknown>)) {
-            if (wk === "path") expect(wv).toBe("subject");
-            else walk(wv, `steps[${i}].with.${wk}`);
-          }
-          continue;
+    walk(wf, "workflow");
+    expect(hits).toEqual([]);
+  });
+
+  it("sets no shell or shell start-up file anywhere (BASH_ENV / ENV / shell: would run a file first)", () => {
+    const hits: string[] = [];
+    const walk = (v: unknown, at: string): void => {
+      if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${at}[${i}]`));
+      else if (v !== null && typeof v === "object") {
+        for (const [k, x] of Object.entries(v)) {
+          if (k === "shell" || k === "BASH_ENV" || k === "ENV") hits.push(`${at}.${k}`);
+          walk(x, `${at}.${k}`);
         }
-        walk(v, `steps[${i}].${k}`);
-      }
-    });
+      } else if (typeof v === "string" && /\bBASH_ENV\b/.test(v)) hits.push(at);
+    };
+    walk(wf, "workflow");
     expect(hits).toEqual([]);
   });
 

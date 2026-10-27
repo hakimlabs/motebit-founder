@@ -281,8 +281,10 @@ interface EventPayload {
 }
 
 /**
- * The events whose runs may judge, and how each is judged. Both see the
- * repository variables (the kill switch) even for a fork PR. Any other event,
+ * The events whose runs may judge, and how each is judged. Both are expected,
+ * per GitHub docs, to get the repository variables (the kill switch) even for
+ * a fork PR; to be confirmed by the first post-merge run (if read empty, the
+ * switch reads as engaged: fail-closed). Any other event,
  * `pull_request` and `pull_request_review` above all, throws: from a fork
  * they carry no variables and run the PR's own copy of the workflow.
  */

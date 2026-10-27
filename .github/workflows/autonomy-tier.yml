@@ -24,8 +24,10 @@ name: Autonomy tier
 # were set; see https://docs.github.com/en/actions/learn-github-actions/variables),
 # so the switch could never be off there.
 # Such a run also uses the PR's own copy of THIS file. `pull_request_target`
-# runs this file, and these scripts, from the base branch, with the variables
-# (docs: "Events that trigger workflows" > pull_request_target). Its check run
+# runs this file, and these scripts, from the base branch (docs: "Events that
+# trigger workflows" > pull_request_target), and is expected per GitHub docs to
+# get the variables; to be confirmed by the first post-merge run (if it reads
+# them empty, the switch reads as engaged: fail-closed). Its check run
 # attaches to the PR's HEAD commit, which is where a required check is read
 # (the same holds for `cla` in cla.yml; seen live on #1181's head).
 #
@@ -36,9 +38,11 @@ name: Autonomy tier
 #
 #  1. merge_group (the authoritative judgement). main-protection requires the
 #     merge queue, and the queue run re-judges every queued PR with its reviews
-#     and the switch AS THEY STAND at queue time, from the API, in a run that
-#     sees the variables. A PR-side pass gone stale (a machine approval or a
-#     dismissed founder approval after the last run) therefore cannot land a
+#     and the switch AS THEY STAND at queue time, from the API (the variables
+#     are expected per GitHub docs on merge_group; to be confirmed live; read
+#     empty, the switch reads engaged: fail-closed). A PR-side pass gone stale
+#     (a machine approval or a dismissed founder approval after the last run)
+#     therefore cannot land a
 #     change: the group fails and the PR is dequeued.
 #  2. Any later PR event: a push (`synchronize`; main-protection also dismisses
 #     stale reviews on push) or an edit of the title or body (`edited`). This
