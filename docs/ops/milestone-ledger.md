@@ -22,7 +22,7 @@ The repository autonomy properties hold **only while the configured GitHub prote
 - A machine-only approval cannot authorize a T1 change.
 - A T0 change can merge on a machine-only approval only while the founder-controlled switch `AUTONOMY_T0` is exactly `on`.
 - The agent's operating credentials cannot change repository protections or approve the agent's own work.
-- After the contract step (#1184), the `merge_group` run is the **deciding** authorization check: it judges the final integration commit against the approvals that exist when the queue builds it. A PR-level `autonomy-tier` result reflects the PR as of its last open, push or edit, and can be stale.
+- Since the contract step (#1184, on main as `6e73f089e`), the `merge_group` run is the **deciding** authorization check: it judges the final integration commit against the approvals that exist when the queue builds it. A PR-level `autonomy-tier` result reflects the PR as of its last open, push or edit, and can be stale.
 
 ## Milestones
 
@@ -61,7 +61,7 @@ Order: A → B → C → D → E. F has the same priority as B and starts when B
 | ------------------------------------------------------------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Classifier and required check exist, deny by default                                                               | implemented                | #1177, `5b666da8a`                                                                                                                                                                                                                                      |
 | Expand step on main (four triggers, switch engaged by construction, git-objects-only fetch, provenance self-check) | implemented                | #1183, merged 2026-10-27T08:08:24Z as `8a1406809`                                                                                                                                                                                                       |
-| Contract step (`pull_request_target` and `merge_group` only; the switch is read)                                   | implemented: pending merge | #1184, head `3101d2f6f`                                                                                                                                                                                                                                 |
+| Contract step (`pull_request_target` and `merge_group` only; the switch is read)                                   | implemented                | #1184, head `3101d2f6f`, merged 2026-10-27T12:35:17Z as `6e73f089e`; all 8 required checks green on the queue commit                                                                                                                                    |
 | Each tamper (a planted defect) turns a test red                                                                    | tested internally          | 106/106 on `3101d2f6f`, isolated run 2026-10-27 10:09Z                                                                                                                                                                                                  |
 | Cold review                                                                                                        | tested internally          | NO-GO on `7cfd33a39` (an `actions/checkout` fork guard, reproduced); GO on expand `875cb2815` and contract `057107c2d`                                                                                                                                  |
 | Fork-PR `pull_request` runs get no repository variables                                                            | operationally demonstrated | #1181: `AUTONOMY_T0` read `""` with the variable set                                                                                                                                                                                                    |
@@ -75,7 +75,7 @@ Order: A → B → C → D → E. F has the same priority as B and starts when B
 | A T0 change merges on a machine-only approval with the switch on                                                   | none yet                   | matrix M3                                                                                                                                                                                                                                               |
 | Revocation (credential, approval, authority) is effective                                                          | none yet                   | matrix M5–M7, R1–R3                                                                                                                                                                                                                                     |
 
-**Acceptance: the contract-phase live matrix.** Run after #1184 merges. Only the founder changes the switch, enqueues, or uses the reviewer token. Each row records:
+**Acceptance: the contract-phase live matrix.** Its precondition, #1184 on main, is met. Only the founder changes the switch, enqueues, or uses the reviewer token. Each row records:
 
 - the merge-queue sha and policy sha (with provenance);
 - the evaluated head and the review snapshot;
@@ -100,7 +100,7 @@ Supersedes the provisional list in #1184's description.
 
 **GO/NO-GO.** NO-GO for standing T0 autonomy. `AUTONOMY_T0` stays `off` until every row passes.
 
-**Next.** #1184 merges; run the matrix; then revise and merge #1163 (the design proposal), which closes A.
+**Next.** Run the matrix; then revise and merge #1163 (the design proposal), which closes A.
 
 ## B–F
 
