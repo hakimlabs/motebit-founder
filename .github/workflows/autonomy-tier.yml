@@ -18,35 +18,36 @@ name: Autonomy tier
 # no working tree), which the scripts only read with git (diff, rev-list,
 # log). No file of the change is ever on disk as a file, so none can run.
 #
-# ## Migration: expand -> verify -> contract (this file is EXPAND)
+# ## Migration: expand -> verify -> contract (this file is CONTRACT)
 #
 # `autonomy-tier` is a required check, and a required check whose workflow has
 # no trigger for a PR's own run never reports on it, which blocks the PR. So
-# the trigger set moves in three steps, never removing the check:
+# the trigger set moved in three steps, never removing the check:
 #
-#  1. expand (this file): trigger on the union of the old and new sets,
-#     pull_request, pull_request_review, pull_request_target and merge_group.
-#     The verdict script's MIGRATION_PHASE is "expand": it judges all four and
-#     treats the kill switch as ENGAGED whatever AUTONOMY_T0 reads (it logs the
-#     observed value and ignores it). This holds for every run whose policy
-#     revision includes this change. A pull_request / pull_request_review run
-#     of a PR whose recorded base predates it runs the OLD script (which reads
-#     AUTONOMY_T0, '' on a fork: engaged). Once this change is on main, every
-#     merge_group base (main, or a queue entry built on it) includes it, so
-#     no later merge can rest on a run that reads the switch as open. The one
-#     exception is this change's own merge_group run, which judges with the
-#     previous main's script.
-#  2. verify: on main, confirm live what is marked "expected" below, above all
-#     that pull_request_target and merge_group runs see AUTONOMY_T0 and that
-#     the subject fetch works for fork PRs.
-#  3. contract (branch fix/autonomy-tier-contract-v2, built on this commit):
-#     pull_request_target and merge_group only, MIGRATION_PHASE "contract",
-#     AUTONOMY_T0 read; the policy-revision expression and the provenance
-#     self-check unchanged.
+#  1. expand (done): the union of pull_request, pull_request_review,
+#     pull_request_target and merge_group, with the kill switch engaged by
+#     construction (MIGRATION_PHASE "expand" ignored AUTONOMY_T0).
+#  2. verify (a precondition of landing this; not checked by any test):
+#     on main under expand, confirm that pull_request_target and merge_group
+#     runs see AUTONOMY_T0 and that the subject fetch works for fork PRs.
+#  3. contract (this file): pull_request_target and merge_group only.
+#     MIGRATION_PHASE is "contract": the verdict script judges exactly these
+#     two events and reads AUTONOMY_T0 (only the exact value `on` disengages
+#     the switch). The policy-revision expression and the provenance
+#     self-check are unchanged from expand (its pull_request /
+#     pull_request_review branches are unreachable now; kept so the
+#     expression and the script's eventPolicyRef stay one rule).
+#
+#     This PR's own runs: its pull_request_target run uses main's (expand)
+#     file and script, its merge_group run this file with the expand script
+#     of the queue base. Both judge with the switch engaged.
 #
 # ## What each event runs
 #
 # (observed = seen live on this repo; expected = per GitHub docs, not yet seen)
+#
+# pull_request and pull_request_review are no longer triggers; as they ran
+# during expand:
 #
 #  - pull_request (fork PR): this file from the PR's merge commit (expected);
 #    GITHUB_SHA = the PR merge commit, PR code included (expected); repository
@@ -98,11 +99,9 @@ name: Autonomy tier
 #
 # ## Limitations (stated, not hidden)
 #
-#  - On pull_request and pull_request_review the workflow YAML itself is the
-#    PR's merge-commit copy, so a PR that edits this file controls its own
-#    pull_request runs. Mitigations: CODEOWNERS owns this file (a change to it
-#    needs the founder's review), and the pull_request_target and merge_group
-#    runs use the base's and the queue's copies.
+#  - The merge_group run uses the queue commit's copy of this file, which a
+#    queued PR can change. Mitigation: CODEOWNERS owns this file (a change to
+#    it needs the founder's review).
 #  - On merge_group the policy base can be the previous queue entry (approved
 #    and checked, not yet on main), so the ancestry check is skipped there.
 #    The queue commit's copy of this file is the one that runs.
@@ -124,12 +123,6 @@ name: Autonomy tier
 # event outside its phase's set (`judgedEvent`), so a trigger added here
 # without the phase moving fails closed.
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, edited]
-  # An approval, an edited review, or a dismissal changes the verdict.
-  pull_request_review:
-    types: [submitted, edited, dismissed]
   pull_request_target:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, edited]
@@ -196,7 +189,7 @@ jobs:
         working-directory: trusted
         env:
           GH_TOKEN: ${{ github.token }}
-          # Logged and ignored during expand (the switch is engaged by construction).
+          # The kill switch: only the exact value `on` disengages it.
           AUTONOMY_T0: ${{ vars.AUTONOMY_T0 }}
           # The policy revision the checkout was told to take (same expression).
           EXPECTED_POLICY_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name == 'pull_request_target' && github.sha || (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.sha || 'no-policy-revision-for-this-event' }}

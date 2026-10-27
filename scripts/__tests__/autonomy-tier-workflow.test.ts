@@ -1,7 +1,7 @@
 /**
  * autonomy-tier workflow — the trigger, policy-revision and pwn-request
  * invariants of `.github/workflows/autonomy-tier.yml`, read from the REAL
- * file, and the expand phase of the verdict script end to end.
+ * file, and the contract phase of the verdict script end to end.
  *
  * The defect behind the migration (seen live on #1181, 2026-10-27): every
  * agent PR comes from a fork, and GitHub passes no repository variables to a
@@ -217,8 +217,6 @@ const PR_TYPES = ["opened", "synchronize", "reopened", "ready_for_review", "edit
 const EXPECTED_WORKFLOW = {
   name: "Autonomy tier",
   on: {
-    pull_request: { branches: ["main"], types: PR_TYPES },
-    pull_request_review: { types: ["submitted", "edited", "dismissed"] },
     pull_request_target: { branches: ["main"], types: PR_TYPES },
     merge_group: { types: ["checks_requested"] },
   },
@@ -345,9 +343,10 @@ describe("judgedEvent: the phase's events are judged, nothing else", () => {
     }
   });
 
-  it("the default phase is MIGRATION_PHASE, which is expand", () => {
-    expect(MIGRATION_PHASE).toBe("expand");
-    expect(() => judgedEvent("pull_request")).not.toThrow();
+  it("the default phase is MIGRATION_PHASE, which is contract", () => {
+    expect(MIGRATION_PHASE).toBe("contract");
+    expect(() => judgedEvent("pull_request")).toThrow(/unsupported event/);
+    expect(() => judgedEvent("pull_request_review")).toThrow(/unsupported event/);
   });
 });
 
@@ -366,27 +365,23 @@ describe("the kill switch during expand", () => {
   it("contract judges the value as read", () => {
     expect(switchForVerdict("on", "contract").value).toBe("on");
     expect(switchForVerdict(undefined, "contract").value).toBeUndefined();
+    expect(switchForVerdict("on").log).toBe(
+      'autonomy-tier: AUTONOMY_T0 observed "on" (contract phase: read)',
+    );
   });
 });
 
 describe("the autonomy-tier workflow's triggers", () => {
-  it("triggers on exactly the expand union: pull_request, pull_request_review, pull_request_target and merge_group", () => {
-    expect(Object.keys(wf.on).sort()).toEqual([
-      "merge_group",
-      "pull_request",
-      "pull_request_review",
-      "pull_request_target",
-    ]);
+  it("triggers on exactly the contract set: pull_request_target and merge_group", () => {
+    expect(Object.keys(wf.on).sort()).toEqual(["merge_group", "pull_request_target"]);
   });
 
   it("the triggers are exactly the current phase's judged events (PHASE_EVENTS[MIGRATION_PHASE])", () => {
     expect(Object.keys(wf.on).sort()).toEqual([...PHASE_EVENTS[MIGRATION_PHASE]].sort());
   });
 
-  it("pull_request and pull_request_target cover every PR-side change into main; reviews and the queue are judged", () => {
-    expect(wf.on.pull_request).toEqual({ branches: ["main"], types: PR_TYPES });
+  it("pull_request_target covers every PR-side change into main; the queue is judged", () => {
     expect(wf.on.pull_request_target).toEqual({ branches: ["main"], types: PR_TYPES });
-    expect(wf.on.pull_request_review).toEqual({ types: ["submitted", "edited", "dismissed"] });
     expect(wf.on.merge_group).toEqual({ types: ["checks_requested"] });
   });
 
@@ -598,7 +593,7 @@ function wouldTripUnsafeCheckoutGuard(step: Step, ctx: Ctx): boolean {
 
 describe("a fork PR on pull_request_target (head.repo.id != repository.id)", () => {
   it("no checkout step checks out PR code, so actions/checkout's unsafe-PR guard never fires, and no step disables it", () => {
-    for (const e of PHASE_EVENTS.expand) {
+    for (const e of PHASE_EVENTS[MIGRATION_PHASE]) {
       for (const c of checkouts) {
         expect(wouldTripUnsafeCheckoutGuard(c, forkCtx(e)), `${e} ${c.name}`).toBe(false);
         const ref = evaluate(String(c.with?.ref).slice(3, -2).trim(), forkCtx(e));
@@ -953,29 +948,66 @@ async function run(
   return { code, verdict: JSON.parse(json) as Verdict, lines };
 }
 
-describe("the expand script end to end: every event it judges, the same verdict", () => {
+describe("the contract script end to end: every event it judges, the same verdict", () => {
   it(
-    "every event the expand script judges gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
+    "every event the contract script judges gives the same verdict for the same PR state and AUTONOMY_T0; only the exact value on opens the switch",
     async () => {
-      const cases: { pr: 7 | 8; state: ReviewState; pass: boolean; reason: string }[] = [
-        { pr: 7, state: "machine-only", pass: false, reason: "kill-switch-machine-only" },
-        { pr: 8, state: "machine-only", pass: false, reason: "machine-approved-t1" },
-        { pr: 7, state: "founder-at-head", pass: true, reason: "founder-approved" },
-        { pr: 8, state: "founder-at-head", pass: true, reason: "founder-approved" },
-        { pr: 7, state: "none", pass: true, reason: "no-machine-approval" },
+      const cases: {
+        pr: 7 | 8;
+        state: ReviewState;
+        autonomyT0: string | undefined;
+        pass: boolean;
+        reason: string;
+      }[] = [
+        { pr: 7, state: "machine-only", autonomyT0: "on", pass: true, reason: "t0" },
+        {
+          pr: 7,
+          state: "machine-only",
+          autonomyT0: "",
+          pass: false,
+          reason: "kill-switch-machine-only",
+        },
+        {
+          pr: 7,
+          state: "machine-only",
+          autonomyT0: undefined,
+          pass: false,
+          reason: "kill-switch-machine-only",
+        },
+        {
+          pr: 7,
+          state: "machine-only",
+          autonomyT0: "ON",
+          pass: false,
+          reason: "kill-switch-machine-only",
+        },
+        {
+          pr: 8,
+          state: "machine-only",
+          autonomyT0: "on",
+          pass: false,
+          reason: "machine-approved-t1",
+        },
+        { pr: 7, state: "founder-at-head", autonomyT0: "", pass: true, reason: "founder-approved" },
+        {
+          pr: 8,
+          state: "founder-at-head",
+          autonomyT0: "on",
+          pass: true,
+          reason: "founder-approved",
+        },
+        { pr: 7, state: "none", autonomyT0: "", pass: true, reason: "no-machine-approval" },
       ];
       for (const c of cases) {
-        for (const event of PHASE_EVENTS.expand) {
-          for (const autonomyT0 of ["on", "", undefined]) {
-            const r = await run(event, c.pr, c.state, { autonomyT0 });
-            const label = `${event} #${c.pr} ${c.state} AUTONOMY_T0=${String(autonomyT0)}`;
-            expect(r.verdict.reason, label).toBeUndefined();
-            expect(
-              r.verdict.prs.map((v) => [v.pass, v.reason]),
-              label,
-            ).toEqual([[c.pass, c.reason]]);
-            expect(r.code, label).toBe(c.pass ? 0 : 1);
-          }
+        for (const event of PHASE_EVENTS[MIGRATION_PHASE]) {
+          const r = await run(event, c.pr, c.state, { autonomyT0: c.autonomyT0 });
+          const label = `${event} #${c.pr} ${c.state} AUTONOMY_T0=${String(c.autonomyT0)}`;
+          expect(r.verdict.reason, label).toBeUndefined();
+          expect(
+            r.verdict.prs.map((v) => [v.pass, v.reason]),
+            label,
+          ).toEqual([[c.pass, c.reason]]);
+          expect(r.code, label).toBe(c.pass ? 0 : 1);
         }
       }
     },
@@ -983,12 +1015,10 @@ describe("the expand script end to end: every event it judges, the same verdict"
   );
 
   it(
-    "logs the observed AUTONOMY_T0 and that it is ignored",
+    "logs the observed AUTONOMY_T0 and that it is read",
     async () => {
       const r = await run("pull_request_target", 7, "none", { autonomyT0: "on" });
-      expect(r.lines).toContain(
-        'autonomy-tier: AUTONOMY_T0 observed "on" (expand phase: ignored, switch engaged)',
-      );
+      expect(r.lines).toContain('autonomy-tier: AUTONOMY_T0 observed "on" (contract phase: read)');
     },
     E2E_TIMEOUT,
   );
@@ -996,13 +1026,13 @@ describe("the expand script end to end: every event it judges, the same verdict"
   it(
     "logs one provenance line: the policy sha, the API head and the review snapshot judged",
     async () => {
-      const r = await run("pull_request", 7, "machine-only");
+      const r = await run("pull_request_target", 7, "machine-only");
       const p = r.lines.filter((l) => l.startsWith("autonomy-tier: provenance "));
       expect(p).toHaveLength(1);
       const logged = JSON.parse(p[0]!.slice("autonomy-tier: provenance ".length)) as Provenance;
       expect(logged).toMatchObject({
-        event: "pull_request",
-        phase: "expand",
+        event: "pull_request_target",
+        phase: "contract",
         policy_sha: fixture.base,
         expected_policy_sha: fixture.base,
         policy_on_main: true,
@@ -1032,7 +1062,7 @@ describe("the expand script end to end: every event it judges, the same verdict"
   it(
     "fails policy-provenance when the policy checkout is not the expected revision",
     async () => {
-      for (const event of PHASE_EVENTS.expand) {
+      for (const event of PHASE_EVENTS[MIGRATION_PHASE]) {
         const r = await run(event, 7, "none", { expected: fixture.head[7] });
         expect(r.verdict, event).toMatchObject({ pass: false, reason: "policy-provenance" });
         expect(r.code).toBe(1);
