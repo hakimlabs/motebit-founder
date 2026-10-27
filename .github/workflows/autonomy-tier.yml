@@ -1,6 +1,6 @@
 name: Autonomy tier
 
-# The `autonomy-tier` check of docs/proposals/repo-autonomy-v1.md ("Enforced
+# The `autonomy-tier` check of docs/proposals/repo-autonomy-v1.md (#1163; "Enforced
 # by GitHub, not by the agent's good behaviour"). It FAILS when the machine
 # reviewer (motebit-reviewer) has approved a PR that is not T0, or when the
 # kill switch (repository variable AUTONOMY_T0, anything but `on`) is engaged
@@ -18,11 +18,11 @@ name: Autonomy tier
 #
 # ## Why pull_request_target, and no review trigger
 #
-# Every agent PR comes from a fork. GitHub passes no repository variables to a
-# run triggered by a fork PR's `pull_request` or `pull_request_review` event
-# (docs: "Variables" > "Configuration variables are not passed to workflows
-# that are triggered by a pull request from a fork"), so AUTONOMY_T0 read ''
-# there and the switch could never be off (seen live on #1181, 2026-10-27).
+# Every agent PR comes from a fork. A fork PR's `pull_request` and
+# `pull_request_review` runs get no repository variables (seen live on #1181,
+# 2026-10-27: those runs logged AUTONOMY_T0 and TURBO_TEAM empty while both
+# were set; see https://docs.github.com/en/actions/learn-github-actions/variables),
+# so the switch could never be off there.
 # Such a run also uses the PR's own copy of THIS file. `pull_request_target`
 # runs this file, and these scripts, from the base branch, with the variables
 # (docs: "Events that trigger workflows" > pull_request_target). Its check run
@@ -41,10 +41,13 @@ name: Autonomy tier
 #     dismissed founder approval after the last run) therefore cannot land a
 #     change: the group fails and the PR is dequeued.
 #  2. Any later PR event: a push (`synchronize`; main-protection also dismisses
-#     stale reviews on push) or an edit of the title or body (`edited`).
-#  3. Re-running the job. A re-run re-reads the live reviews, and variables are
-#     read when the job runs. This is how a founder lifts a stale FAIL after
-#     approving (or edit the PR body, which needs no Actions permission).
+#     stale reviews on push) or an edit of the title or body (`edited`). This
+#     is the recovery for a stale FAIL after a founder approval: edit the PR
+#     body. It is a fresh event, so it runs main's current workflow and scripts.
+#  3. Re-running the job. A re-run re-reads the live reviews from the API, but
+#     keeps the original GITHUB_SHA, so it runs the OLD base copy of this file
+#     and the scripts. Whether it reads the variable's current value is not yet
+#     proven live; prefer (2).
 #
 # Each verdict reads the reviews and the PR head from the API when it runs,
 # never from the event payload, and refuses to judge a head that has moved.

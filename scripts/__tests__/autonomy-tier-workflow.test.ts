@@ -136,6 +136,54 @@ describe("the autonomy-tier workflow's pull_request_target safety", () => {
     for (const s of job.steps) if (s.run !== undefined) expect(s.run).not.toContain("${{");
   });
 
+  it("no step is conditional or allowed to fail (a skipped or tolerated step reports success)", () => {
+    expect(Object.keys(job)).not.toContain("continue-on-error");
+    for (const s of job.steps) {
+      expect(Object.keys(s)).not.toContain("if");
+      expect(Object.keys(s)).not.toContain("continue-on-error");
+    }
+  });
+
+  it("every action is a remote action pinned to a full commit sha (no local ./ action)", () => {
+    const uses = job.steps.filter((s) => s.uses !== undefined).map((s) => s.uses!);
+    expect(uses.length).toBeGreaterThan(0);
+    for (const u of uses) {
+      expect(u.startsWith("./")).toBe(false);
+      expect(u).toMatch(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_./-]+@[0-9a-f]{40}$/);
+    }
+  });
+
+  it("nothing but the head checkout's own path names subject/ (no step input or env from the head)", () => {
+    // Every string in the job except run scripts (which only pass the path
+    // as an argument to the trusted script, and run in trusted/) and the one
+    // exception: `with.path` of the head checkout step itself.
+    const hits: string[] = [];
+    const walk = (v: unknown, at: string): void => {
+      if (typeof v === "string") {
+        if (/subject/i.test(v)) hits.push(at);
+      } else if (Array.isArray(v)) {
+        v.forEach((x, i) => walk(x, `${at}[${i}]`));
+      } else if (v !== null && typeof v === "object") {
+        for (const [k, x] of Object.entries(v)) walk(x, `${at}.${k}`);
+      }
+    };
+    for (const [k, v] of Object.entries(job)) if (k !== "steps") walk(v, `job.${k}`);
+    job.steps.forEach((s, i) => {
+      for (const [k, v] of Object.entries(s)) {
+        if (k === "run") continue;
+        if (k === "with" && s === subject) {
+          for (const [wk, wv] of Object.entries(v as Record<string, unknown>)) {
+            if (wk === "path") expect(wv).toBe("subject");
+            else walk(wv, `steps[${i}].with.${wk}`);
+          }
+          continue;
+        }
+        walk(v, `steps[${i}].${k}`);
+      }
+    });
+    expect(hits).toEqual([]);
+  });
+
   it("takes the package manager from the base and keeps the dependency cache off", () => {
     const pnpm = job.steps.find((s) => s.uses?.startsWith("pnpm/action-setup@"));
     expect(pnpm?.with?.package_json_file).toBe("trusted/package.json");
