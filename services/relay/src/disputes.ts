@@ -52,7 +52,10 @@ import {
   markOrchestrationTimedOut,
   ORCHESTRATION_WORKER_INTERVAL_MS,
   recordOrchestrationAttempt,
+  readStandingRecord,
+  type FinalizeResult,
   type OrchestrationRow,
+  type StandingRecord,
 } from "./dispute-orchestration.js";
 import { verificationKeyFor } from "./identity-keys.js";
 import {
@@ -594,6 +597,23 @@ function outcomeToResponse(c: Context, disputeId: string, outcome: ResolveOutcom
       202,
     );
   }
+  if (outcome.kind === "not_committed") {
+    // dispute-v1 §6.6: a relay never reports a verdict it did not commit.
+    // The body carries the record that stands: the dispute's state now and
+    // its governing resolution (null when none was committed).
+    return c.json(
+      {
+        error:
+          "This resolution was not committed: the dispute was resolved or left adjudication concurrently. The standing record is returned.",
+        code: "DISPUTE_RESOLUTION_NOT_COMMITTED",
+        status: 409,
+        dispute_id: disputeId,
+        state: outcome.standing.state,
+        resolution: outcome.standing.resolution,
+      },
+      409,
+    );
+  }
   return c.json({
     ok: true,
     dispute_id: disputeId,
@@ -622,7 +642,10 @@ interface ResolveData {
  * attempt — caller surfaces 202 to client, /resolve poll later.
  */
 type ResolveOutcome =
-  { kind: "resolved"; data: ResolveData } | { kind: "deferred"; orchestration: OrchestrationRow };
+  | { kind: "resolved"; data: ResolveData }
+  | { kind: "deferred"; orchestration: OrchestrationRow }
+  /** This call's verdict did not commit; `standing` is what stands. */
+  | { kind: "not_committed"; standing: StandingRecord };
 
 // === §6.2 Federation Orchestrator ===
 //
@@ -826,6 +849,53 @@ export function deriveSingleRelayFundAction(
     };
   }
   return derived;
+}
+
+/**
+ * Whether an operator's single-relay `/resolve` body is the same verdict as
+ * `committed`: the same outcome, and the same fund action and split ratio
+ * once derived from the §7.2 table (#1157). A body the table refuses is
+ * never the same verdict.
+ */
+function sameSingleRelayVerdict(
+  body: { resolution?: unknown; fund_action?: unknown; split_ratio?: unknown },
+  filerRole: FilerRole | null,
+  committed: { resolution: string; fund_action: string; split_ratio: number },
+): boolean {
+  const money = deriveSingleRelayFundAction(body, filerRole);
+  if ("refused" in money) return false;
+  return (
+    body.resolution === committed.resolution &&
+    money.fund_action === committed.fund_action &&
+    money.split_ratio === committed.split_ratio
+  );
+}
+
+/**
+ * dispute-v1 §6.6 on the single-relay path: `200` means the caller's verdict
+ * is the one recorded. A `resolved` outcome another caller produced (the
+ * in-process collapse) answers this caller only if its body is the same
+ * verdict; otherwise it did not commit. A `not_committed` outcome whose
+ * standing verdict IS this caller's is an idempotent replay.
+ */
+function reconcileSingleRelayOutcome(
+  db: DatabaseDriver,
+  disputeId: string,
+  body: { resolution?: unknown; fund_action?: unknown; split_ratio?: unknown },
+  filerRole: FilerRole | null,
+  outcome: ResolveOutcome,
+): ResolveOutcome {
+  if (outcome.kind === "resolved" && !sameSingleRelayVerdict(body, filerRole, outcome.data)) {
+    return { kind: "not_committed", standing: readStandingRecord(db, disputeId) };
+  }
+  if (
+    outcome.kind === "not_committed" &&
+    outcome.standing.resolution !== null &&
+    sameSingleRelayVerdict(body, filerRole, outcome.standing.resolution)
+  ) {
+    return { kind: "resolved", data: outcome.standing.resolution };
+  }
+  return outcome;
 }
 
 /**
@@ -1135,8 +1205,9 @@ export type AttemptOutcome =
  * fan-out cycle) and decides ready / deferred / timed_out.
  *
  * The caller (the /resolve handler or the deferred worker) is responsible
- * for the resolution-write — `finalizeFederationResolution` from
- * `dispute-orchestration.ts` performs the atomic insert + state transition.
+ * for the resolution-write — round 1 through `finalizeFederationResolution`
+ * (`dispute-orchestration.ts`), round 2 through `commitRound2Verdict`; each
+ * performs its atomic, state-guarded insert + transition.
  */
 export async function attemptOrFinalizeFederationResolution(
   dispute: { dispute_id: string; body_json: string; filer_role: FilerRole | null },
@@ -1196,13 +1267,16 @@ export async function attemptOrFinalizeFederationResolution(
 /**
  * Background worker — runs ONE poll cycle. Picks up `in_progress`
  * orchestration rows whose `next_attempt_at <= now`, runs an attempt
- * for each, finalizes ready/timed_out outcomes via
- * `finalizeFederationResolution`. Idempotent: rows finalized in a
- * prior cycle don't re-appear (status flips to done/timed_out).
+ * for each, and commits ready/timed_out outcomes through the round's one
+ * writer: round 1 via `finalizeFederationResolution` (guarded on
+ * `evidence | arbitration`), round 2 via `commitRound2Verdict` (guarded on
+ * `appealed`, fund action in the same transaction). Idempotent: rows
+ * finalized in a prior cycle don't re-appear (status flips to
+ * done/timed_out).
  *
- * Cross-process safety: bounded by DB UNIQUE constraints — concurrent
- * workers across processes converge cleanly (one finalize wins, others
- * no-op via constraint catch in `finalizeFederationResolution`).
+ * Cross-process safety: both writers are state-guarded (and backed by
+ * `UNIQUE(dispute_id, round)`), so concurrent workers across processes
+ * converge — one commit wins, the others write nothing.
  */
 export async function runDeferredOrchestrationCycle(deps: {
   db: DatabaseDriver;
@@ -1261,19 +1335,53 @@ export async function runDeferredOrchestrationCycle(deps: {
         deps,
       );
       if (outcome.state === "ready" || outcome.state === "timed_out") {
-        await finalizeFederationResolution(
-          {
-            disputeId: item.dispute_id,
-            round: item.round,
-            resolution: outcome.result.resolution,
-            rationale: outcome.result.rationale,
-            fund_action: outcome.result.fund_action,
-            split_ratio: outcome.result.split_ratio,
-            adjudicator_votes: outcome.result.adjudicator_votes,
-            resolvedAt: now,
-          },
-          deps,
-        );
+        if (item.round === 2) {
+          // Round 2 has one writer: `commitRound2Verdict`, guarded on
+          // `appealed`, with the fund action in the same transaction (the
+          // `/appeal` handler and the single-relay operator verdict commit
+          // through it too). It needs the whole row: the fund action reads
+          // the allocation and amount from it. A dispute no longer
+          // `appealed` writes nothing (409, logged below); a refused or
+          // frozen fund action keeps the signed round-2 row and is retried
+          // on read (`tryFinalizePersistedRound2`).
+          //
+          // Only a quorum verdict commits. A round 2 that timed out below
+          // quorum writes nothing — no round-2 row, no money, the dispute
+          // stays `appealed` — so a §6.6 0.5 split never overrides a signed
+          // round-1 verdict (design M1: a round-2 fallback row is void; the
+          // appeal lapse, PR 10, lets round 1 govern).
+          if (outcome.state === "ready") {
+            const full = getDispute(db, item.dispute_id);
+            if (!full) throw new Error(`dispute ${item.dispute_id} vanished mid-cycle`);
+            await commitRound2Verdict(db, deps.relayIdentity, full, outcome.result);
+          } else {
+            logger.warn("dispute.orchestration.round_2_timed_out_no_verdict", {
+              disputeId: item.dispute_id,
+              validVoteCount: outcome.result.adjudicator_votes.length,
+            });
+          }
+        } else {
+          const committed = await finalizeFederationResolution(
+            {
+              disputeId: item.dispute_id,
+              round: 1,
+              resolution: outcome.result.resolution,
+              rationale: outcome.result.rationale,
+              fund_action: outcome.result.fund_action,
+              split_ratio: outcome.result.split_ratio,
+              adjudicator_votes: outcome.result.adjudicator_votes,
+              resolvedAt: now,
+            },
+            deps,
+          );
+          if (!committed.persisted) {
+            logger.info("dispute.orchestration.round_1_not_committed", {
+              disputeId: item.dispute_id,
+              state: committed.standing.state,
+              standingResolution: committed.standing.resolution?.resolution ?? null,
+            });
+          }
+        }
         if (outcome.state === "ready") ready++;
         else timedOut++;
       } else {
@@ -1880,24 +1988,21 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     //    Handles re-call after successful resolve + the second-caller-on-
     //    crash-recovery case (first caller completed; second caller sees
     //    the persisted resolution).
-    const existing = db
-      .prepare(
-        // ORDER BY round DESC LIMIT 1: if round 2 exists (post-appeal),
-        // return it; else return round 1. /resolve cached-path always
-        // reflects the latest signed verdict.
-        "SELECT resolution, rationale, fund_action, split_ratio, adjudicator_votes, resolved_at FROM relay_dispute_resolutions WHERE dispute_id = ? ORDER BY round DESC LIMIT 1",
-      )
-      .get(disputeId) as
-      | {
-          resolution: DisputeOutcome;
-          rationale: string;
-          fund_action: DisputeFundAction;
-          split_ratio: number;
-          adjudicator_votes: string;
-          resolved_at: number;
-        }
-      | undefined;
+    //    The governing resolution is the highest committed round (round 2
+    //    if one exists, else round 1). On the single-relay path the
+    //    operator's body IS a verdict: a re-POST of the same verdict is an
+    //    idempotent replay (200); a different one did not commit (409 with
+    //    the standing record, dispute-v1 §6.6). The federation path's body
+    //    is not a verdict (the orchestrator decides), so it always replays.
+    const filerRole = (dispute.filer_role as FilerRole | null) ?? null;
+    const reconcile = (outcome: ResolveOutcome): ResolveOutcome =>
+      relayIsParty ? outcome : reconcileSingleRelayOutcome(db, disputeId, body, filerRole, outcome);
+    const standingNow = readStandingRecord(db, disputeId);
+    const existing = standingNow.resolution;
     if (existing) {
+      if (!relayIsParty && !sameSingleRelayVerdict(body, filerRole, existing)) {
+        return outcomeToResponse(c, disputeId, { kind: "not_committed", standing: standingNow });
+      }
       return c.json({
         ok: true,
         dispute_id: disputeId,
@@ -1906,7 +2011,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
         fund_action: existing.fund_action,
         split_ratio: existing.split_ratio,
         resolved_at: existing.resolved_at,
-        adjudicator_votes: JSON.parse(existing.adjudicator_votes) as AdjudicatorVote[],
+        adjudicator_votes: existing.adjudicator_votes,
       });
     }
 
@@ -1944,8 +2049,11 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // 2. Per-dispute advisory lock. Collapse concurrent calls.
     const inFlight = resolveLocks.get(disputeId);
     if (inFlight) {
+      // The collapsed caller's own body is compared with what the first
+      // caller committed: on the single-relay path a different verdict is
+      // 409, never the other caller's 200.
       const outcome = await inFlight;
-      return outcomeToResponse(c, disputeId, outcome);
+      return outcomeToResponse(c, disputeId, reconcile(outcome));
     }
 
     const isFederationPath =
@@ -2027,9 +2135,14 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       //    the shared `finalizeFederationResolution` helper from
       //    `dispute-orchestration.ts` so the worker can finalize through
       //    the same code path. Single-relay disputes go through the
-      //    same helper for shape consistency.
+      //    same helper for shape consistency. It is guarded on
+      //    `evidence | arbitration`: a verdict that lost a race (another
+      //    process's /resolve or the deferred worker committed first, or the
+      //    dispute left those states during the awaits above) writes nothing
+      //    and is answered 409 with the record that stands, never 200.
+      let committed: FinalizeResult;
       try {
-        await finalizeFederationResolution(
+        committed = await finalizeFederationResolution(
           {
             disputeId,
             round: 1,
@@ -2046,6 +2159,16 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
         throw new HTTPException(500, {
           message: `Dispute resolution persistence failed: ${err instanceof Error ? err.message : String(err)}`,
         });
+      }
+      if (!committed.persisted) {
+        logger.warn("dispute.resolve.not_committed", {
+          disputeId,
+          resolution: resolutionOutcome,
+          isFederation: isFederationPath,
+          state: committed.standing.state,
+          standingResolution: committed.standing.resolution?.resolution ?? null,
+        });
+        return { kind: "not_committed", standing: committed.standing };
       }
 
       logger.info("dispute.resolved", {
@@ -2073,7 +2196,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     resolveLocks.set(disputeId, resolvePromise);
     try {
       const outcome = await resolvePromise;
-      return outcomeToResponse(c, disputeId, outcome);
+      return outcomeToResponse(c, disputeId, reconcile(outcome));
     } finally {
       resolveLocks.delete(disputeId);
     }
@@ -2274,11 +2397,19 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       dispute.state === "opened" &&
       Date.now() > (dispute.filed_at as number) + OPENED_EXPIRE_MS
     ) {
-      db.prepare(
-        "UPDATE relay_disputes SET state = 'expired', expired_at = ? WHERE dispute_id = ?",
-      ).run(Date.now(), disputeId);
-      dispute.state = "expired";
-      dispute.expired_at = Date.now();
+      // Guarded on state like every other dispute-state writer: the read
+      // above may be stale against another process, and an expiry must
+      // never overwrite a dispute that left `opened` (M6, "Who may write
+      // dispute state"). A lost race reads the state that stands.
+      const expired = db
+        .prepare(
+          "UPDATE relay_disputes SET state = 'expired', expired_at = ? WHERE dispute_id = ? AND state = 'opened'",
+        )
+        .run(Date.now(), disputeId);
+      dispute = getDispute(db, disputeId) ?? dispute;
+      if (expired.changes === 0) {
+        logger.info("dispute.expire.not_committed", { disputeId, state: dispute.state });
+      }
     }
 
     // Lazy-on-read finalize: §3.3 + §7.1 + §7.3 — if state=resolved AND

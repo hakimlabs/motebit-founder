@@ -21,8 +21,10 @@
  * single source of truth, the worker (`runDeferredOrchestrationCycle`)
  * picks up `in_progress` rows on every poll regardless of process
  * identity. Cross-process concurrency is bounded by:
- *   - `relay_dispute_resolutions UNIQUE(dispute_id, round)` catches any
- *     duplicate finalize race (one wins, the other rolls back gracefully).
+ *   - the round-1 commit is guarded `WHERE state IN ('evidence',
+ *     'arbitration')`, and `relay_dispute_resolutions UNIQUE(dispute_id,
+ *     round)` backs it: a duplicate finalize race has one winner, and the
+ *     loser rolls back and reports the standing record.
  *   - `relay_dispute_votes UNIQUE(dispute_id, round, peer_id) ON CONFLICT
  *     DO UPDATE` makes parallel fan-outs to the same peer idempotent.
  *
@@ -176,21 +178,33 @@ export function getDueOrchestrations(
 }
 
 /**
- * Sign + persist a DisputeResolution row and transition the dispute to
- * `resolved` (round 1) or `final` (round 2) atomically. Used by both
- * the synchronous /resolve quorum-on-first-attempt path and the
- * deferred worker's quorum-on-later-attempt path.
+ * Sign + persist a ROUND-1 DisputeResolution row and transition the dispute
+ * `evidence | arbitration → resolved`, atomically. Used by both the
+ * synchronous /resolve paths (single-relay, and federation quorum on the
+ * first attempt) and the deferred worker's quorum-on-a-later-attempt path.
  *
- * Cross-process safety: the `relay_dispute_resolutions UNIQUE
- * (dispute_id, round)` constraint catches any concurrent finalize race
- * — one writer wins, the other catches the constraint violation and
- * is a no-op (the resolution that landed first is canonical). Returns
- * `{ persisted: true }` if this call wrote the row, `{ persisted: false }`
- * if a concurrent writer beat us to it.
+ * Round 1 only. Round 2 commits through `commitRound2Verdict` (disputes.ts),
+ * guarded on `appealed`, with its fund action in the same transaction. This
+ * function's former round-2 branch moved a dispute to `final` without running
+ * the fund action.
+ *
+ * Guarded on state (docs/proposals/dispute-money-path-v1.md M6, "Who may
+ * write dispute state"): the transition is `WHERE state IN ('evidence',
+ * 'arbitration')`, so a dispute that is already `resolved`, `appealed`,
+ * `final` or `expired` is never moved back. The resolution row is written
+ * only when that transition happened, in the same transaction.
+ *
+ * Cross-process safety: the state guard and `relay_dispute_resolutions
+ * UNIQUE (dispute_id, round)` both catch a concurrent finalize. One writer
+ * wins; the other rolls back and writes nothing. Returns `{ persisted: true }`
+ * when this call committed, else `{ persisted: false, standing }`: the record
+ * that stands (the dispute's state now, and its governing resolution if any: round 2 when one was committed, else round 1).
+ * A caller never reports its own verdict when `persisted` is false.
  */
 export interface FinalizeArgs {
   disputeId: string;
-  round: number;
+  /** Round 1 only: round 2 commits through `commitRound2Verdict`. */
+  round: 1;
   resolution: DisputeOutcome;
   rationale: string;
   fund_action: DisputeFundAction;
@@ -204,11 +218,67 @@ export interface FinalizeDeps {
   relayIdentity: RelayIdentity;
 }
 
+/** A committed resolution as it stands in `relay_dispute_resolutions`. */
+export interface StandingResolution {
+  round: number;
+  resolution: DisputeOutcome;
+  rationale: string;
+  fund_action: DisputeFundAction;
+  split_ratio: number;
+  adjudicator_votes: AdjudicatorVote[];
+  resolved_at: number;
+}
+
+/** What stands for a dispute when a verdict did not commit. */
+export interface StandingRecord {
+  /** The dispute's state now; null if the row is gone. */
+  state: string | null;
+  /** Its governing resolution (the highest committed round, as `/resolve`'s cached path reads it), if any. */
+  resolution: StandingResolution | null;
+}
+
+export type FinalizeResult =
+  | { persisted: true; signature: string }
+  | { persisted: false; signature: string; standing: StandingRecord };
+
+/** Read the standing record (state + governing resolution) for a dispute. */
+export function readStandingRecord(db: DatabaseDriver, disputeId: string): StandingRecord {
+  const dispute = db
+    .prepare("SELECT state FROM relay_disputes WHERE dispute_id = ?")
+    .get(disputeId) as { state: string } | undefined;
+  const row = db
+    .prepare(
+      `SELECT round, resolution, rationale, fund_action, split_ratio, adjudicator_votes, resolved_at
+       FROM relay_dispute_resolutions WHERE dispute_id = ? ORDER BY round DESC LIMIT 1`,
+    )
+    .get(disputeId) as
+    | (Omit<StandingResolution, "adjudicator_votes"> & { adjudicator_votes: string | null })
+    | undefined;
+  return {
+    state: dispute?.state ?? null,
+    resolution: row
+      ? {
+          ...row,
+          adjudicator_votes: row.adjudicator_votes
+            ? (JSON.parse(row.adjudicator_votes) as AdjudicatorVote[])
+            : [],
+        }
+      : null,
+  };
+}
+
 export async function finalizeFederationResolution(
   args: FinalizeArgs,
   deps: FinalizeDeps,
-): Promise<{ persisted: boolean; signature: string }> {
+): Promise<FinalizeResult> {
   const { db, relayIdentity } = deps;
+  if (args.round !== 1) {
+    // Unreachable through the type; a cast or a JS caller lands here. Round 2
+    // has exactly one writer, `commitRound2Verdict`.
+    throw new Error(
+      `finalizeFederationResolution commits round 1 only (got round ${String(args.round)}); round 2 commits through commitRound2Verdict`,
+    );
+  }
   const signed = await signDisputeResolution(
     {
       dispute_id: args.disputeId,
@@ -224,25 +294,51 @@ export async function finalizeFederationResolution(
   );
   const resolutionId = `res-${args.resolvedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-  // The two-step transition (insert resolution + update dispute state)
-  // runs in a single transaction. The state-target depends on round:
-  //   round 1 → 'resolved' (24h appeal window opens)
-  //   round 2 → 'final'    (terminal; fund_action executes elsewhere)
-  // Round 2's atomic transition mirrors disputes.ts /appeal handler.
-  const targetState = args.round === 1 ? "resolved" : "final";
-  const stateColumn = args.round === 1 ? "resolved_at" : "final_at";
+  const notPersisted = (reason: string): FinalizeResult => {
+    const standing = readStandingRecord(db, args.disputeId);
+    logger.info("dispute.finalize.not_committed", {
+      disputeId: args.disputeId,
+      reason,
+      state: standing.state,
+      standingResolution: standing.resolution?.resolution ?? null,
+    });
+    return { persisted: false, signature: signed.signature, standing };
+  };
+
+  // One transaction: the guarded state move, then the resolution row. The
+  // UPDATE re-reads the state itself, after the signing await; whatever the
+  // caller read before that await may be stale.
   db.exec("BEGIN");
   try {
+    const moved = db
+      .prepare(
+        `UPDATE relay_disputes
+           SET state = 'resolved', resolution = ?, rationale = ?, fund_action = ?,
+               split_ratio = ?, adjudicator = ?, resolved_at = ?
+           WHERE dispute_id = ? AND state IN ('evidence', 'arbitration')`,
+      )
+      .run(
+        args.resolution,
+        args.rationale,
+        args.fund_action,
+        args.split_ratio,
+        relayIdentity.relayMotebitId,
+        args.resolvedAt,
+        args.disputeId,
+      );
+    if (moved.changes === 0) {
+      db.exec("ROLLBACK");
+      return notPersisted("state_not_adjudicable");
+    }
     try {
       db.prepare(
         `INSERT INTO relay_dispute_resolutions
            (resolution_id, dispute_id, round, resolution, rationale, fund_action,
             split_ratio, adjudicator, adjudicator_votes, resolved_at, signature, is_appeal)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       ).run(
         resolutionId,
         args.disputeId,
-        args.round,
         args.resolution,
         args.rationale,
         args.fund_action,
@@ -251,38 +347,18 @@ export async function finalizeFederationResolution(
         JSON.stringify(args.adjudicator_votes),
         args.resolvedAt,
         signed.signature,
-        args.round === 2 ? 1 : 0,
       );
     } catch (err) {
-      // UNIQUE(dispute_id, round) constraint hit — concurrent writer
-      // beat us. Roll back, return persisted: false. Caller treats as
-      // success (resolution is canonical from the other writer).
-      db.exec("ROLLBACK");
+      // UNIQUE(dispute_id, round): a round-1 row already exists for a dispute
+      // still in evidence/arbitration (one an earlier relay left). The
+      // standing row wins; this verdict is not committed.
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("UNIQUE") || msg.includes("constraint")) {
-        logger.info("dispute.finalize.concurrent_writer_won", {
-          disputeId: args.disputeId,
-          round: args.round,
-        });
-        return { persisted: false, signature: signed.signature };
+        db.exec("ROLLBACK");
+        return notPersisted("round_1_row_exists");
       }
       throw err;
     }
-    db.prepare(
-      `UPDATE relay_disputes
-         SET state = ?, resolution = ?, rationale = ?, fund_action = ?,
-             split_ratio = ?, adjudicator = ?, ${stateColumn} = ?
-         WHERE dispute_id = ?`,
-    ).run(
-      targetState,
-      args.resolution,
-      args.rationale,
-      args.fund_action,
-      args.split_ratio,
-      relayIdentity.relayMotebitId,
-      args.resolvedAt,
-      args.disputeId,
-    );
     db.exec("COMMIT");
   } catch (err) {
     db.exec("ROLLBACK");
