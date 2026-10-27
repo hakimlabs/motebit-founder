@@ -798,3 +798,5 @@ Motebit sits inside several established lineages and combines them. The novelty 
 [2]: https://www.w3.org/TR/vc-data-model-2.0/
 [3]: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
 [4]: https://cs.nyu.edu/~mohri/pub/jalc.pdf
+
+<!-- autonomy-tier live matrix (T0, B2): throwaway, never merge -->
