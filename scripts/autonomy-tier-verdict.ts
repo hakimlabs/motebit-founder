@@ -30,7 +30,7 @@
  * leaves it disengaged. `off`, unset, empty or anything else engages it — an
  * unset variable reads as `''` in a workflow, and a kill switch that a missing
  * variable silently disarms is not one. During the expand phase (below) the
- * variable is not read at all: the switch is engaged on every event.
+ * variable was not read at all; in contract (now) it is read.
  *
  * On `merge_group`, every commit in base..head is one queued PR (squash
  * titles end `(#N)`); each is classified on its own commit diff — the exact
@@ -43,7 +43,7 @@
  * throughout (a required check whose workflow has no trigger for the PR's own
  * run never reports, and blocks it):
  *
- *   expand    (now) `pull_request`, `pull_request_review`,
+ *   expand    (done) `pull_request`, `pull_request_review`,
  *             `pull_request_target` and `merge_group` are all judged. Every
  *             agent PR comes from a fork, and a fork PR's `pull_request` /
  *             `pull_request_review` run gets no repository variables (seen
@@ -54,7 +54,7 @@
  *             judges then gives the same verdict for the same PR state, and
  *             no run of THIS script can open the switch. (A run whose policy
  *             revision predates expand runs the older script instead.)
- *   contract  (branch fix/autonomy-tier-contract) only `pull_request_target`
+ *   contract  (now) only `pull_request_target`
  *             and `merge_group` are judged, and `AUTONOMY_T0` is read.
  *
  * `judgedEvent` refuses every event outside the phase's set (`PHASE_EVENTS`),
@@ -317,7 +317,7 @@ export type MigrationPhase = "expand" | "contract";
  * the workflow's trigger set (autonomy-tier-workflow.test.ts holds the
  * workflow's `on:` keys equal to `PHASE_EVENTS[MIGRATION_PHASE]`).
  */
-export const MIGRATION_PHASE: MigrationPhase = "expand";
+export const MIGRATION_PHASE: MigrationPhase = "contract";
 
 /** The events each phase judges: exactly the workflow's triggers in that phase. */
 export const PHASE_EVENTS: Readonly<Record<MigrationPhase, readonly string[]>> = {

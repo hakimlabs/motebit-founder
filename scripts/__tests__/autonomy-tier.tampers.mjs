@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Tamper check for classify-autonomy-tier.test.ts, autonomy-tier-verdict.test.ts
-// and autonomy-tier-workflow.test.ts (the expand phase of the trigger migration).
+// and autonomy-tier-workflow.test.ts (the contract phase of the trigger migration).
 //
 // Each entry reverts (part of) one rule of the autonomy boundary — an
 // allowlist exclusion, a widening of the allowlist, a fail-closed rule, the
@@ -24,7 +24,7 @@ const WORKFLOW_TEST = "scripts/__tests__/autonomy-tier-workflow.test.ts";
 const EXACT =
   "the autonomy-tier workflow's exact shape (the authority) equals the expected shape exactly: every key, every step, every value";
 const E2E = (title) =>
-  `the expand script end to end: every event it judges, the same verdict ${title}`;
+  `the contract script end to end: every event it judges, the same verdict ${title}`;
 const PROV = (title) =>
   `policy provenance (the primary self-check): the policy that ran is the revision selected for the event ${title}`;
 const TRIP = (title) => `policy provenance: the secondary tripwire ${title}`;
@@ -288,41 +288,47 @@ const TAMPERS = [
     VERDICT_TEST,
   ),
 
-  // The trigger migration (expand → verify → contract). A fork PR's
-  // pull_request / pull_request_review run gets no repository variables
-  // (#1181, 2026-10-27), so during EXPAND the kill switch is engaged by
-  // construction on every event, the trigger set is the union, and the
-  // policy revision is chosen per event from GitHub-set event fields.
+  // The trigger migration (expand → verify → contract), CONTRACT step: only
+  // pull_request_target and merge_group, AUTONOMY_T0 read. The contract-only
+  // entries (pull_request / pull_request_review back) return; the expand-only
+  // "acts on AUTONOMY_T0" entries retire (acting on it is now the rule).
   {
-    name: "expand: the verdict acts on the observed AUTONOMY_T0",
+    name: "contract: the verdict ignores AUTONOMY_T0 (the switch never opens)",
     file: VERDICT,
     text: "  const verdict = withProvenance(decide(prs, killSwitch.value), provenanceFailures(prov));",
     replacement:
-      "  const verdict = withProvenance(decide(prs, env.AUTONOMY_T0), provenanceFailures(prov));",
+      "  const verdict = withProvenance(decide(prs, EXPAND_SWITCH_VALUE), provenanceFailures(prov));",
     red: E2E(
-      "every event the expand script judges gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
+      "every event the contract script judges gives the same verdict for the same PR state and AUTONOMY_T0; only the exact value on opens the switch",
     ),
     test: WORKFLOW_TEST,
   },
   {
-    name: "expand: one event (pull_request_target) acts on AUTONOMY_T0",
-    file: VERDICT,
-    text: "  const verdict = withProvenance(decide(prs, killSwitch.value), provenanceFailures(prov));",
-    replacement:
-      '  const verdict = withProvenance(decide(prs, eventName === "pull_request_target" ? env.AUTONOMY_T0 : killSwitch.value), provenanceFailures(prov));',
-    red: E2E(
-      "every event the expand script judges gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
-    ),
-    test: WORKFLOW_TEST,
-  },
-  {
-    name: "expand: a fork-context event (pull_request) acts on AUTONOMY_T0",
+    name: "contract: one event (merge_group) ignores AUTONOMY_T0",
     file: VERDICT,
     text: "  const killSwitch = switchForVerdict(env.AUTONOMY_T0);",
     replacement:
-      '  const killSwitch = switchForVerdict(env.AUTONOMY_T0, eventName === "pull_request" ? "contract" : MIGRATION_PHASE);',
+      '  const killSwitch = switchForVerdict(env.AUTONOMY_T0, eventName === "merge_group" ? "expand" : MIGRATION_PHASE);',
     red: E2E(
-      "every event the expand script judges gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
+      "every event the contract script judges gives the same verdict for the same PR state and AUTONOMY_T0; only the exact value on opens the switch",
+    ),
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "contract: switchForVerdict ignores the value in contract",
+    file: VERDICT,
+    text: "    return {\n      value: observed,",
+    replacement: "    return {\n      value: EXPAND_SWITCH_VALUE,",
+    red: "the kill switch during expand contract judges the value as read",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "contract: any value but on opens the switch",
+    file: VERDICT,
+    text: '  return value !== "on";',
+    replacement: '  return value !== "on" && value !== "ON";',
+    red: E2E(
+      "every event the contract script judges gives the same verdict for the same PR state and AUTONOMY_T0; only the exact value on opens the switch",
     ),
     test: WORKFLOW_TEST,
   },
@@ -335,18 +341,18 @@ const TAMPERS = [
     test: WORKFLOW_TEST,
   },
   {
-    name: "expand: the observed value is no longer logged",
+    name: "the observed value is no longer logged",
     file: VERDICT,
     text: "  process.stdout.write(`${killSwitch.log}\\n`);",
     replacement: "",
-    red: E2E("logs the observed AUTONOMY_T0 and that it is ignored"),
+    red: E2E("logs the observed AUTONOMY_T0 and that it is read"),
     test: WORKFLOW_TEST,
   },
   {
-    name: "phase: MIGRATION_PHASE flipped to contract without the trigger set",
+    name: "phase: MIGRATION_PHASE flipped back to expand without the trigger set",
     file: VERDICT,
-    text: 'export const MIGRATION_PHASE: MigrationPhase = "expand";',
-    replacement: 'export const MIGRATION_PHASE: MigrationPhase = "contract";',
+    text: 'export const MIGRATION_PHASE: MigrationPhase = "contract";',
+    replacement: 'export const MIGRATION_PHASE: MigrationPhase = "expand";',
     red: "the autonomy-tier workflow's triggers the triggers are exactly the current phase's judged events (PHASE_EVENTS[MIGRATION_PHASE])",
     test: WORKFLOW_TEST,
   },
@@ -359,8 +365,7 @@ const TAMPERS = [
     test: WORKFLOW_TEST,
   },
   {
-    // Retargeted from the contract-only "a pull_request run is judged again".
-    name: "phase: contract judges pull_request again",
+    name: "verdict: a pull_request run is judged again (contract)",
     file: VERDICT,
     text: '  contract: ["merge_group", "pull_request_target"],',
     replacement: '  contract: ["merge_group", "pull_request", "pull_request_target"],',
@@ -375,9 +380,24 @@ const TAMPERS = [
     red: "judgedEvent: the phase's events are judged, nothing else refuses any other event, and an empty name, in either phase",
     test: WORKFLOW_TEST,
   },
+  {
+    name: "workflow: back on pull_request (fork runs get no variables)",
+    file: WORKFLOW,
+    text: "on:\n  pull_request_target:\n",
+    replacement: `on:\n  pull_request:\n    branches: [main]\n    types: [${PR_TYPES}]\n  pull_request_target:\n`,
+    red: "the autonomy-tier workflow's triggers triggers on exactly the contract set: pull_request_target and merge_group",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: the pull_request_review trigger is back",
+    file: WORKFLOW,
+    text: "  merge_group:\n    types: [checks_requested]\n",
+    replacement:
+      "  merge_group:\n    types: [checks_requested]\n  pull_request_review:\n    types: [submitted, edited, dismissed]\n",
+    red: "the autonomy-tier workflow's triggers triggers on exactly the contract set: pull_request_target and merge_group",
+    test: WORKFLOW_TEST,
+  },
   ...[
-    ["pull_request", `  pull_request:\n    branches: [main]\n    types: [${PR_TYPES}]\n`],
-    ["pull_request_review", "  pull_request_review:\n    types: [submitted, edited, dismissed]\n"],
     [
       "pull_request_target",
       `  pull_request_target:\n    branches: [main]\n    types: [${PR_TYPES}]\n`,
@@ -388,7 +408,7 @@ const TAMPERS = [
     file: WORKFLOW,
     text: block,
     replacement: "",
-    red: "the autonomy-tier workflow's triggers triggers on exactly the expand union: pull_request, pull_request_review, pull_request_target and merge_group",
+    red: "the autonomy-tier workflow's triggers triggers on exactly the contract set: pull_request_target and merge_group",
     test: WORKFLOW_TEST,
   })),
   {
@@ -405,15 +425,7 @@ const TAMPERS = [
     text: `  pull_request_target:\n    branches: [main]\n    types: [${PR_TYPES}]\n`,
     replacement:
       "  pull_request_target:\n    branches: [main]\n    types: [opened, reopened, ready_for_review, edited]\n",
-    red: "the autonomy-tier workflow's triggers pull_request and pull_request_target cover every PR-side change into main; reviews and the queue are judged",
-    test: WORKFLOW_TEST,
-  },
-  {
-    name: "workflow: a review dismissal is no longer re-judged",
-    file: WORKFLOW,
-    text: "    types: [submitted, edited, dismissed]\n",
-    replacement: "    types: [submitted, edited]\n",
-    red: "the autonomy-tier workflow's triggers pull_request and pull_request_target cover every PR-side change into main; reviews and the queue are judged",
+    red: "the autonomy-tier workflow's triggers pull_request_target covers every PR-side change into main; the queue is judged",
     test: WORKFLOW_TEST,
   },
   {
