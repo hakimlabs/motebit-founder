@@ -21,6 +21,8 @@ const CLASSIFIER_TEST = "scripts/__tests__/classify-autonomy-tier.test.ts";
 const VERDICT_TEST = "scripts/__tests__/autonomy-tier-verdict.test.ts";
 const WORKFLOW = ".github/workflows/autonomy-tier.yml";
 const WORKFLOW_TEST = "scripts/__tests__/autonomy-tier-workflow.test.ts";
+const EXACT =
+  "the autonomy-tier workflow's exact shape (the authority) equals the expected shape exactly: every key, every step, every value";
 
 const T1 = (name) => `must-T1 fixtures T1: ${name}`;
 const OFF = (text) => text.replace(/^(\s*(?:else )?)if \(/, "$1if ((false as boolean) && ");
@@ -468,6 +470,61 @@ const TAMPERS = [
     text: '          --subject "$GITHUB_WORKSPACE/subject"\n',
     replacement: '          --subject "$GITHUB_WORKSPACE/subject" && bash ../subject/evil.sh\n',
     red: "the autonomy-tier workflow's pull_request_target safety nothing in the whole workflow names subject/ but the head checkout's path and the verdict's --subject argument",
+    test: WORKFLOW_TEST,
+  },
+  // Runtime-assembled bypasses no text scan can see: only the exact shape
+  // (the authority) catches them.
+  {
+    name: "workflow K: a run body assembles the head path at run time",
+    file: WORKFLOW,
+    text: "        run: pnpm install --frozen-lockfile\n",
+    replacement:
+      "        run: pnpm install --frozen-lockfile && d=sub && cd ../${d}ject && ./evil.sh\n",
+    red: EXACT,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow M: NODE_OPTIONS appended to $GITHUB_ENV",
+    file: WORKFLOW,
+    text: "        run: pnpm install --frozen-lockfile\n",
+    replacement:
+      '        run: |\n          pnpm install --frozen-lockfile\n          echo "NODE_OPTIONS=--require=$GITHUB_WORKSPACE/s""ubject/x.js" >> "$GITHUB_ENV"\n',
+    red: EXACT,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow S: a head directory appended to $GITHUB_PATH",
+    file: WORKFLOW,
+    text: "        run: pnpm install --frozen-lockfile\n",
+    replacement:
+      '        run: |\n          pnpm install --frozen-lockfile\n          echo "$GITHUB_WORKSPACE/s""ubject/bin" >> "$GITHUB_PATH"\n',
+    red: EXACT,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow L: NODE_OPTIONS in the verdict step env, path built by format()",
+    file: WORKFLOW,
+    text: "          AUTONOMY_T0: ${{ vars.AUTONOMY_T0 }}\n",
+    replacement:
+      "          AUTONOMY_T0: ${{ vars.AUTONOMY_T0 }}\n          NODE_OPTIONS: --require ${{ github.workspace }}/${{ format('{0}ject','sub') }}/x.js\n",
+    red: EXACT,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow T: an npm config variable in the install step env",
+    file: WORKFLOW,
+    text: "        working-directory: trusted\n        run: pnpm install --frozen-lockfile\n",
+    replacement:
+      "        working-directory: trusted\n        env:\n          npm_config_globalconfig: ../x\n        run: pnpm install --frozen-lockfile\n",
+    red: EXACT,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow R: the verdict's exit code is discarded (|| true)",
+    file: WORKFLOW,
+    text: '          --subject "$GITHUB_WORKSPACE/subject"\n',
+    replacement: '          --subject "$GITHUB_WORKSPACE/subject" || true\n',
+    red: EXACT,
     test: WORKFLOW_TEST,
   },
   {

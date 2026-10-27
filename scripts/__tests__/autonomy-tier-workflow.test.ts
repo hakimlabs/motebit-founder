@@ -72,6 +72,113 @@ describe("judgedEvent: only events that see the repository variables are judged"
   });
 });
 
+/**
+ * THE AUTHORITY: the workflow's exact shape, deny by default (the same
+ * pattern as the classifier's T0 ALLOWLIST). A text scan cannot close a
+ * bypass assembled at run time (`cd ../${d}ject`, a line appended to
+ * $GITHUB_ENV or $GITHUB_PATH, `NODE_OPTIONS` in a step env, an npm config
+ * variable, `|| true` after the verdict). An exact shape does: every key and
+ * value of the parsed workflow must equal this, `run:` bodies compared after
+ * trimming trailing whitespace only. The semantic tests below stay for their
+ * readable failures; this one decides.
+ */
+const EXPECTED_WORKFLOW = {
+  name: "Autonomy tier",
+  on: {
+    pull_request_target: {
+      branches: ["main"],
+      types: ["opened", "synchronize", "reopened", "ready_for_review", "edited"],
+    },
+    merge_group: { types: ["checks_requested"] },
+  },
+  concurrency: {
+    group:
+      "autonomy-tier-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}",
+    "cancel-in-progress": true,
+  },
+  permissions: { contents: "read", "pull-requests": "read" },
+  jobs: {
+    "autonomy-tier": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 15,
+      steps: [
+        {
+          name: "Check out the base (the classifier and CODEOWNERS that judge)",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          with: {
+            ref: "${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.sha }}",
+            path: "trusted",
+            "persist-credentials": false,
+          },
+        },
+        {
+          name: "Check out the change as git data (never executed)",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          with: {
+            ref: "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}",
+            path: "subject",
+            "fetch-depth": 0,
+            "persist-credentials": false,
+          },
+        },
+        {
+          uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+          with: { package_json_file: "trusted/package.json" },
+        },
+        {
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          with: { "node-version": "22", "package-manager-cache": false },
+        },
+        {
+          name: "Install the base's dependencies (uncached)",
+          "working-directory": "trusted",
+          run: "pnpm install --frozen-lockfile",
+        },
+        {
+          name: "Classify and decide",
+          "working-directory": "trusted",
+          env: {
+            GH_TOKEN: "${{ github.token }}",
+            AUTONOMY_T0: "${{ vars.AUTONOMY_T0 }}",
+          },
+          run:
+            "pnpm exec tsx scripts/autonomy-tier-verdict.ts" +
+            ' --event-name "$GITHUB_EVENT_NAME"' +
+            ' --event-path "$GITHUB_EVENT_PATH"' +
+            ' --repository "$GITHUB_REPOSITORY"' +
+            ' --subject "$GITHUB_WORKSPACE/subject"',
+        },
+      ],
+    },
+  },
+};
+
+/** Trailing whitespace of `run:` bodies is the only normalization. */
+function normalized(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(normalized);
+  if (v !== null && typeof v === "object") {
+    return Object.fromEntries(
+      Object.entries(v).map(([k, x]) => [
+        k,
+        k === "run" && typeof x === "string" ? x.trimEnd() : normalized(x),
+      ]),
+    );
+  }
+  return v;
+}
+
+describe("the autonomy-tier workflow's exact shape (the authority)", () => {
+  it("equals the expected shape exactly: every key, every step, every value", () => {
+    expect(
+      normalized(wf),
+      "autonomy-tier.yml differs from EXPECTED_WORKFLOW in scripts/__tests__/autonomy-tier-workflow.test.ts, " +
+        "the canonical shape of this pull_request_target workflow (deny by default). Fix: if the change is " +
+        "unintended, revert it; if it is intended, update EXPECTED_WORKFLOW in the same commit, under founder " +
+        "review (the workflow is CODEOWNERS-owned), and re-check that no PR-head code can run.",
+    ).toEqual(EXPECTED_WORKFLOW);
+  });
+});
+
 describe("the autonomy-tier workflow's triggers", () => {
   it("triggers on pull_request_target and merge_group only", () => {
     expect(Object.keys(wf.on).sort()).toEqual(["merge_group", "pull_request_target"]);
