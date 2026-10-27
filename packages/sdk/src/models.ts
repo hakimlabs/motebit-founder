@@ -506,11 +506,19 @@ export function defaultModelForProvider(provider: ModelDefaultProvider): string 
 export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
   anthropic: "2026-12-31",
   openai: "2026-12-31",
-  google: "2026-10-31",
-  deepseek: "2026-10-31",
-  groq: "2026-10-31",
-  "local-server": "2026-10-31",
-  proxy: "2026-10-31",
+  // Reviewed 2026-10-26, each default kept:
+  // - local-server `qwen3`: still the current balanced, tool-capable local family.
+  // - proxy `claude-sonnet-4-6`: moving Motebit Cloud to the 5.5 family is a
+  //   pricing and catalog decision (MOTEBIT_CLOUD_ACCEPTED_MODELS); it is not
+  //   taken here.
+  // - google / deepseek / groq: these vendors' live catalogs were NOT witnessed.
+  //   The drift gate has no keys for them (PROVIDER_VERIFICATION: available),
+  //   so the defaults are kept on purpose, not as verified current.
+  google: "2027-01-31",
+  deepseek: "2027-01-31",
+  groq: "2027-01-31",
+  "local-server": "2027-01-31",
+  proxy: "2027-01-31",
 };
 
 // === Conversation history budget ===
