@@ -1,22 +1,106 @@
 name: Autonomy tier
 
-# The `autonomy-tier` check of docs/proposals/repo-autonomy-v1.md ("Enforced
+# The `autonomy-tier` check of docs/proposals/repo-autonomy-v1.md (#1163; "Enforced
 # by GitHub, not by the agent's good behaviour"). It FAILS when the machine
 # reviewer (motebit-reviewer) has approved a PR that is not T0, or when the
-# kill switch (repository variable AUTONOMY_T0, anything but `on`) is engaged
-# and the machine reviewer's is the only approval. It passes otherwise: T0,
-# a founder (hakimlabs) approval of the current head, or no machine approval.
+# kill switch is engaged and the machine reviewer's is the only approval. It
+# passes otherwise: T0 (switch disengaged), a founder (hakimlabs) approval of
+# the current head, or no machine approval. It also fails when the policy that
+# judged cannot be shown to be the authorized revision (`policy-provenance`).
 #
-# It grants NO authority. It only becomes a boundary once it is a required
-# check in the main-protection ruleset (a founder action), and it has nothing
-# to judge until the motebit-reviewer account exists.
+# It grants NO authority, and it has nothing to judge until the
+# motebit-reviewer account exists.
 #
 # The tier comes from scripts/classify-autonomy-tier.ts and the verdict from
-# scripts/autonomy-tier-verdict.ts — both run from the BASE checkout
+# scripts/autonomy-tier-verdict.ts. Both run from the trusted checkout
 # (`trusted/`), never from the PR head; the head is checked out only as git
-# data (`subject/`) and none of its code runs. (A pull_request run still uses
-# the PR's own copy of THIS file; .github/ is owned in CODEOWNERS, so an edit
-# to it cannot merge without the founder.)
+# data (`subject/`) and none of its code runs.
+#
+# ## Migration: expand -> verify -> contract (this file is EXPAND)
+#
+# `autonomy-tier` is a required check, and a required check whose workflow has
+# no trigger for a PR's own run never reports on it, which blocks the PR. So
+# the trigger set moves in three steps, never removing the check:
+#
+#  1. expand (this file): trigger on the union of the old and new sets,
+#     pull_request, pull_request_review, pull_request_target and merge_group.
+#     The verdict script's MIGRATION_PHASE is "expand": it judges all four and
+#     treats the kill switch as ENGAGED on every event, whatever AUTONOMY_T0
+#     reads (it logs the observed value and ignores it). So the switch cannot
+#     open during expand, by construction, and every event gives the same
+#     verdict for the same PR state.
+#  2. verify: on main, confirm live what is marked "expected" below, above all
+#     that pull_request_target and merge_group runs see AUTONOMY_T0.
+#  3. contract (branch fix/autonomy-tier-contract): pull_request_target and
+#     merge_group only, MIGRATION_PHASE "contract", AUTONOMY_T0 read.
+#
+# ## What each event runs
+#
+# (observed = seen live on this repo; expected = per GitHub docs, not yet seen)
+#
+#  - pull_request (fork PR): this file from the PR's merge commit (expected);
+#    GITHUB_SHA = the PR merge commit, PR code included (expected); repository
+#    variables NOT passed, AUTONOMY_T0 read '' (observed, #1181); the check run
+#    attaches to the PR head sha (observed, #1179 run 40326658776).
+#  - pull_request_review (fork PR): as pull_request (expected); variables not
+#    passed (observed, #1181); check run on the PR head sha (observed, #1181
+#    run 40441613110).
+#  - pull_request_target: this file from the base branch; GITHUB_SHA = the base
+#    branch's tip; variables passed (all expected).
+#  - merge_group: this file from the queue commit; GITHUB_SHA = the queue
+#    commit, PR code included; variables passed (all expected).
+#
+# Several same-named `autonomy-tier` check runs coexist on one head sha, one
+# per event's check suite, and a later failure after an earlier success left
+# the PR BLOCKED (observed). The concurrency group carries the event name so
+# one event's run never cancels another's (a cancelled required check reads as
+# a failure).
+#
+# ## The policy revision (trusted/), per event
+#
+#  - pull_request, pull_request_review: github.event.pull_request.base.sha (NOT
+#    github.sha, which there is the PR merge commit). It is the base recorded
+#    on the PR, and may lag main's tip.
+#  - pull_request_target: github.sha, the base branch's tip.
+#  - merge_group: github.event.merge_group.base_sha (github.sha is the queue
+#    commit).
+#  - any other event: an unresolvable ref, so the checkout fails (closed).
+#
+# The verdict step gets the same expression as EXPECTED_POLICY_SHA and fails
+# `policy-provenance` unless trusted/'s HEAD equals it and it is the ref the
+# script itself derives from the event. On the three PR events the policy
+# commit must also be an ancestor of origin/main (trusted/ is fetched with
+# full history for this). The provenance line logs the policy sha, the heads
+# read from the API and the review snapshot each verdict was computed from.
+#
+# ## Limitations (stated, not hidden)
+#
+#  - On pull_request and pull_request_review the workflow YAML itself is the
+#    PR's merge-commit copy, so a PR that edits this file controls its own
+#    pull_request runs. Mitigations: CODEOWNERS owns this file (a change to it
+#    needs the founder's review), and the pull_request_target and merge_group
+#    runs use the base's and the queue's copies.
+#  - On merge_group the policy base can be the previous queue entry (approved
+#    and checked, not yet on main), so the ancestry check is skipped there.
+#    The queue commit's copy of this file is the one that runs.
+#
+# ## pull_request_target safety (the "pwn request" trap)
+#
+# - No PR-head code runs. Scripts and dependencies come only from `trusted/`.
+#   `subject/` is only read by git (rev-list, log, diff); no install, build or
+#   script runs in it. A `.gitattributes` there cannot run a driver: drivers
+#   come from git config, which the checkout does not take from the tree.
+# - Read-only token (contents, pull-requests), no secrets, and
+#   persist-credentials: false on both checkouts.
+# - No expression is interpolated into a `run:` script; event fields reach the
+#   script through the event file and step env only.
+# - No dependency cache (a cache is the one thing a PR run could write that a
+#   base run reads).
+#
+# Each verdict reads the reviews and the PR head from the API when it runs,
+# and refuses to judge a head that has moved. The verdict script refuses every
+# event outside its phase's set (`judgedEvent`), so a trigger added here
+# without the phase moving fails closed.
 on:
   pull_request:
     branches: [main]
@@ -24,13 +108,16 @@ on:
   # An approval, an edited review, or a dismissal changes the verdict.
   pull_request_review:
     types: [submitted, edited, dismissed]
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   # The merge queue (docs/ops/merge-queue.md): judged again against the exact
   # commits the queue builds, with the reviews as they stand at queue time.
   merge_group:
     types: [checks_requested]
 
 concurrency:
-  group: autonomy-tier-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
+  group: autonomy-tier-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
   cancel-in-progress: true
 
 # Least privilege: read the repository and the PR's reviews; nothing else.
@@ -43,11 +130,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out the base (the classifier and CODEOWNERS that judge)
+      - name: Check out the policy revision (the classifier and CODEOWNERS that judge)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          # The per-event policy revision (header); never PR code.
+          ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name == 'pull_request_target' && github.sha || (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.sha || 'no-policy-revision-for-this-event' }}
           path: trusted
+          # Full history, so origin/main is present for the ancestry check.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Check out the change as git data (never executed)
@@ -71,7 +161,7 @@ jobs:
           # package-manager cache is switched off explicitly too.
           package-manager-cache: false
 
-      - name: Install the base's dependencies (uncached)
+      - name: Install the policy revision's dependencies (uncached)
         working-directory: trusted
         run: pnpm install --frozen-lockfile
 
@@ -79,7 +169,11 @@ jobs:
         working-directory: trusted
         env:
           GH_TOKEN: ${{ github.token }}
+          # Logged and ignored during expand (the switch is engaged by construction).
           AUTONOMY_T0: ${{ vars.AUTONOMY_T0 }}
+          # The policy revision the first checkout was told to take (same expression).
+          EXPECTED_POLICY_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name == 'pull_request_target' && github.sha || (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.sha || 'no-policy-revision-for-this-event' }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: >-
           pnpm exec tsx scripts/autonomy-tier-verdict.ts
           --event-name "$GITHUB_EVENT_NAME"
