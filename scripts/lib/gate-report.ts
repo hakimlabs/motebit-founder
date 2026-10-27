@@ -206,3 +206,5 @@ export function formatRepair(report: RepairReport): string {
   if (doctrine) out += `  Doctrine: ${doctrine}\n`;
   return out + "\n";
 }
+
+// autonomy-tier live matrix (T1, A2): throwaway, never merge
