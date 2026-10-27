@@ -23,14 +23,23 @@ const WORKFLOW = ".github/workflows/autonomy-tier.yml";
 const WORKFLOW_TEST = "scripts/__tests__/autonomy-tier-workflow.test.ts";
 const EXACT =
   "the autonomy-tier workflow's exact shape (the authority) equals the expected shape exactly: every key, every step, every value";
-const E2E = (title) => `the expand phase end to end: every event, the same verdict ${title}`;
+const E2E = (title) =>
+  `the expand script end to end: every event it judges, the same verdict ${title}`;
 const PROV = (title) =>
-  `policy provenance (the authority): the policy that ran is the authorized revision ${title}`;
-const TRIP = (title) => `policy provenance: the secondary tripwire (not the authority) ${title}`;
+  `policy provenance (the primary self-check): the policy that ran is the revision selected for the event ${title}`;
+const TRIP = (title) => `policy provenance: the secondary tripwire ${title}`;
 const PASSES =
   "the autonomy-tier workflow's triggers passes the repository variable and the policy and head refs to the verdict step";
 const SUBJ =
-  "the autonomy-tier workflow's pull_request_target safety nothing in the whole workflow names subject/ but the head checkout's path and the verdict's --subject argument";
+  "the autonomy-tier workflow's pull_request_target safety nothing in the whole workflow names subject but the fetch step's store and the verdict's --subject argument";
+const FORK = (title) => `a fork PR on pull_request_target (head.repo.id != repository.id) ${title}`;
+const NO_PR_CHECKOUT = FORK(
+  "no checkout step checks out PR code, so actions/checkout's unsafe-PR guard never fires, and no step disables it",
+);
+const FETCHED = FORK(
+  "the change is fetched as git objects into a bare store, from this repository, never the fork",
+);
+const STORE = '"$GITHUB_WORKSPACE/subject.git"';
 const PR_TYPES = "opened, synchronize, reopened, ready_for_review, edited";
 // The per-event policy revision expression, as the workflow spells it (checkout ref and verdict env).
 const POLICY_REF =
@@ -291,7 +300,7 @@ const TAMPERS = [
     replacement:
       "  const verdict = withProvenance(decide(prs, env.AUTONOMY_T0), provenanceFailures(prov));",
     red: E2E(
-      "every event gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
+      "every event the expand script judges gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
     ),
     test: WORKFLOW_TEST,
   },
@@ -302,7 +311,7 @@ const TAMPERS = [
     replacement:
       '  const verdict = withProvenance(decide(prs, eventName === "pull_request_target" ? env.AUTONOMY_T0 : killSwitch.value), provenanceFailures(prov));',
     red: E2E(
-      "every event gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
+      "every event the expand script judges gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
     ),
     test: WORKFLOW_TEST,
   },
@@ -313,7 +322,7 @@ const TAMPERS = [
     replacement:
       '  const killSwitch = switchForVerdict(env.AUTONOMY_T0, eventName === "pull_request" ? "contract" : MIGRATION_PHASE);',
     red: E2E(
-      "every event gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
+      "every event the expand script judges gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
     ),
     test: WORKFLOW_TEST,
   },
@@ -442,8 +451,8 @@ const TAMPERS = [
   {
     name: "workflow: EVENT_HEAD_SHA is not the head checkout's expression",
     file: WORKFLOW,
-    text: "          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}\n",
-    replacement: "          EVENT_HEAD_SHA: ${{ github.sha }}\n",
+    text: `          EXPECTED_POLICY_SHA: ${POLICY_REF}\n          EVENT_HEAD_SHA: \${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}\n`,
+    replacement: `          EXPECTED_POLICY_SHA: ${POLICY_REF}\n          EVENT_HEAD_SHA: \${{ github.sha }}\n`,
     red: PASSES,
     test: WORKFLOW_TEST,
   },
@@ -489,7 +498,69 @@ const TAMPERS = [
     red: EXACT,
     test: WORKFLOW_TEST,
   },
-  // Policy provenance (the authority), then the secondary tripwire.
+  // The change is git objects only (actions/checkout v7 refuses a fork PR's
+  // head on pull_request_target; this workflow checks out no PR code at all).
+  {
+    name: "fork: the head checkout (and so the unsafe-PR guard) is back",
+    file: WORKFLOW,
+    text: "      - name: Fetch the change as git objects only (no working tree, never executed)\n",
+    replacement:
+      "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          ref: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}\n          path: pr\n          persist-credentials: false\n\n      - name: Fetch the change as git objects only (no working tree, never executed)\n",
+    red: NO_PR_CHECKOUT,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "fork: the unsafe-PR guard is switched off on the checkout",
+    file: WORKFLOW,
+    text: "          fetch-depth: 0\n          persist-credentials: false\n",
+    replacement:
+      "          fetch-depth: 0\n          persist-credentials: false\n          allow-unsafe-pr-checkout: true\n",
+    red: NO_PR_CHECKOUT,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "fork: the store is not bare (a working tree of PR code)",
+    file: WORKFLOW,
+    text: `          git init --quiet --bare ${STORE} &&\n`,
+    replacement: `          git init --quiet ${STORE} &&\n`,
+    red: FETCHED,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "fork: the PR tree is materialised from the store",
+    file: WORKFLOW,
+    text: '          "+$EVENT_HEAD_SHA:refs/autonomy-tier/head"\n',
+    replacement: `          "+$EVENT_HEAD_SHA:refs/autonomy-tier/head" &&\n          git -C ${STORE} --work-tree=../pr checkout -f refs/autonomy-tier/head\n`,
+    red: FETCHED,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "fork: a step runs with the PR tree as its cwd",
+    file: WORKFLOW,
+    text: "      - name: Classify and decide\n        working-directory: trusted\n",
+    replacement: "      - name: Classify and decide\n        working-directory: pr\n",
+    red: "the autonomy-tier workflow's pull_request_target safety every run step works in trusted/, never in the PR head",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "fork: the change is fetched from the fork's repository",
+    file: WORKFLOW,
+    text: '          "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"\n',
+    replacement: '          "$GITHUB_SERVER_URL/$HEAD_REPO"\n',
+    red: FETCHED,
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "fork: the head is not fetched (the verdict cannot judge it)",
+    file: WORKFLOW,
+    text: '          "+$EVENT_BASE_SHA:refs/autonomy-tier/base"\n          "+$EVENT_HEAD_SHA:refs/autonomy-tier/head"\n',
+    replacement: '          "+$EVENT_BASE_SHA:refs/autonomy-tier/base"\n',
+    red: E2E(
+      "the fetch step, run as written, takes a fork PR's head from the base repository's refs/pull/N/head into a bare store the verdict judges from",
+    ),
+    test: WORKFLOW_TEST,
+  },
+  // Policy provenance (the primary self-check), then the secondary tripwire.
   {
     name: "provenance: the check is removed from the verdict",
     file: VERDICT,
@@ -598,12 +669,11 @@ const TAMPERS = [
     test: WORKFLOW_TEST,
   },
   {
-    name: "workflow: the head checkout persists the token",
+    name: "workflow: the policy checkout persists the token",
     file: WORKFLOW,
-    text: "          path: subject\n          # The three-dot diff needs the merge base; the merge group needs base..head.\n          fetch-depth: 0\n          persist-credentials: false\n",
-    replacement:
-      "          path: subject\n          # The three-dot diff needs the merge base; the merge group needs base..head.\n          fetch-depth: 0\n          persist-credentials: true\n",
-    red: "the autonomy-tier workflow's pull_request_target safety checks out exactly the base and the head, neither persisting credentials",
+    text: "          fetch-depth: 0\n          persist-credentials: false\n",
+    replacement: "          fetch-depth: 0\n          persist-credentials: true\n",
+    red: "the autonomy-tier workflow's pull_request_target safety checks out exactly one tree, the policy revision, without persisting credentials",
     test: WORKFLOW_TEST,
   },
   {
@@ -728,8 +798,8 @@ const TAMPERS = [
   {
     name: "workflow: the verdict step also runs a script from the PR head",
     file: WORKFLOW,
-    text: '          --subject "$GITHUB_WORKSPACE/subject"\n',
-    replacement: '          --subject "$GITHUB_WORKSPACE/subject" && bash ../subject/evil.sh\n',
+    text: `          --subject ${STORE}\n`,
+    replacement: `          --subject ${STORE} && bash ../subject/evil.sh\n`,
     red: SUBJ,
     test: WORKFLOW_TEST,
   },
@@ -783,8 +853,8 @@ const TAMPERS = [
   {
     name: "workflow R: the verdict's exit code is discarded (|| true)",
     file: WORKFLOW,
-    text: '          --subject "$GITHUB_WORKSPACE/subject"\n',
-    replacement: '          --subject "$GITHUB_WORKSPACE/subject" || true\n',
+    text: `          --subject ${STORE}\n`,
+    replacement: `          --subject ${STORE} || true\n`,
     red: EXACT,
     test: WORKFLOW_TEST,
   },

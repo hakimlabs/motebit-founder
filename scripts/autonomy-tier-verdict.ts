@@ -50,9 +50,10 @@
  *             live on #1181: `AUTONOMY_T0` read `''`) and runs the PR's own
  *             copy of the workflow. So in expand the kill switch is ENGAGED BY
  *             CONSTRUCTION on every event (`switchForVerdict`): the observed
- *             `AUTONOMY_T0` is logged and ignored. Every event then gives the
- *             same verdict for the same PR state, and no run of this script
- *             can open the switch.
+ *             `AUTONOMY_T0` is logged and ignored. Every event this script
+ *             judges then gives the same verdict for the same PR state, and
+ *             no run of THIS script can open the switch. (A run whose policy
+ *             revision predates expand runs the older script instead.)
  *   contract  (branch fix/autonomy-tier-contract) only `pull_request_target`
  *             and `merge_group` are judged, and `AUTONOMY_T0` is read.
  *
@@ -60,7 +61,9 @@
  * and autonomy-tier-workflow.test.ts holds the workflow's triggers equal to
  * that set, so a trigger added without the phase moving fails closed.
  *
- * Policy provenance (`provenanceFailures`; the authority over every run): this
+ * Policy provenance (`provenanceFailures`): a CONSISTENCY SELF-CHECK run by
+ * the very policy it checks (so not an authority: a different policy could
+ * skip it), catching an honest policy running in the wrong place. This
  * script and the classifier must be the revision the workflow selected for the
  * event from GitHub-set event fields (`EXPECTED_POLICY_SHA`, re-derived here by
  * `eventPolicyRef`), and on the PR events that revision must be on main's
@@ -454,7 +457,8 @@ export function provenanceFailures(p: Provenance): string[] {
   const out: string[] = [];
   const policy = p.policy_sha;
 
-  // ── PRIMARY: provenance (the authority). The executable policy is the
+  // ── PRIMARY self-check: provenance (run by the policy it checks, so it
+  // catches misplacement, not a hostile policy). The executable policy is the
   // revision selected for this event from GitHub-set event fields, whatever
   // the PR contains.
   if (policy === null || !FULL_SHA.test(policy)) {
@@ -483,7 +487,7 @@ export function provenanceFailures(p: Provenance): string[] {
     );
   }
 
-  // ── SECONDARY tripwire (not the authority). Legitimate equality cannot
+  // ── SECONDARY tripwire. Legitimate equality cannot
   // occur: an open PR's head always has commits beyond its base, and a merge
   // group's head is always a new commit on top of its base. So equality
   // means the policy IS the change under judgement.

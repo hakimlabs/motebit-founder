@@ -11,9 +11,9 @@
  * the kill switch engaged by construction on every one of them, and the policy
  * revision chosen per event from GitHub-set event fields, never from PR code.
  *
- * Authority, in order: the exact workflow shape (EXPECTED_WORKFLOW), then
- * POLICY PROVENANCE (`provenanceFailures`: the policy that ran is the
- * authorized revision). The head-inequality checks are a secondary tripwire.
+ * The authority is the exact workflow shape (EXPECTED_WORKFLOW). Policy
+ * provenance (`provenanceFailures`) is a consistency self-check run by the
+ * policy it checks: primary self-check first, then a secondary tripwire.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -74,7 +74,7 @@ const wf = parse(source) as {
 const job = wf.jobs["autonomy-tier"]!;
 const checkouts = job.steps.filter((s) => s.uses?.startsWith("actions/checkout@"));
 const trusted = checkouts.find((s) => s.with?.path === "trusted");
-const subject = checkouts.find((s) => s.with?.path === "subject");
+const fetchStep = job.steps.find((s) => s.name?.startsWith("Fetch the change"));
 const verdictStep = job.steps.find((s) => s.run?.includes("scripts/autonomy-tier-verdict.ts"));
 
 // ── A minimal evaluator for the GitHub expressions this workflow uses ────────
@@ -192,6 +192,16 @@ function ctxFor(event: string): Ctx {
 const POLICY_REF =
   "${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event_name == 'pull_request_target' && github.sha || (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') && github.event.pull_request.base.sha || 'no-policy-revision-for-this-event' }}";
 const HEAD_REF = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}";
+const BASE_REF = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}";
+/** The bare object store the change is fetched into (no working tree). */
+const STORE = '"$GITHUB_WORKSPACE/subject.git"';
+/** The change's commits, as git objects, from THIS repository (never the fork). */
+const FETCH_RUN =
+  `git init --quiet --bare ${STORE} &&` +
+  ` git -C ${STORE} fetch --quiet --no-tags` +
+  ' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"' +
+  ' "+$EVENT_BASE_SHA:refs/autonomy-tier/base"' +
+  ' "+$EVENT_HEAD_SHA:refs/autonomy-tier/head"';
 const PR_TYPES = ["opened", "synchronize", "reopened", "ready_for_review", "edited"];
 
 /**
@@ -234,14 +244,10 @@ const EXPECTED_WORKFLOW = {
           },
         },
         {
-          name: "Check out the change as git data (never executed)",
-          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-          with: {
-            ref: HEAD_REF,
-            path: "subject",
-            "fetch-depth": 0,
-            "persist-credentials": false,
-          },
+          name: "Fetch the change as git objects only (no working tree, never executed)",
+          "working-directory": "trusted",
+          env: { EVENT_BASE_SHA: BASE_REF, EVENT_HEAD_SHA: HEAD_REF },
+          run: FETCH_RUN,
         },
         {
           uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
@@ -270,7 +276,7 @@ const EXPECTED_WORKFLOW = {
             ' --event-name "$GITHUB_EVENT_NAME"' +
             ' --event-path "$GITHUB_EVENT_PATH"' +
             ' --repository "$GITHUB_REPOSITORY"' +
-            ' --subject "$GITHUB_WORKSPACE/subject"',
+            ` --subject ${STORE}`,
         },
       ],
     },
@@ -398,7 +404,8 @@ describe("the autonomy-tier workflow's triggers", () => {
     expect(verdict).toHaveLength(1);
     expect(verdict[0]!.env?.AUTONOMY_T0).toBe("${{ vars.AUTONOMY_T0 }}");
     expect(verdict[0]!.env?.EXPECTED_POLICY_SHA).toBe(trusted!.with?.ref);
-    expect(verdict[0]!.env?.EVENT_HEAD_SHA).toBe(subject!.with?.ref);
+    expect(verdict[0]!.env?.EVENT_HEAD_SHA).toBe(HEAD_REF);
+    expect(fetchStep?.env?.EVENT_HEAD_SHA).toBe(HEAD_REF);
   });
 
   it("one event's run never shares a concurrency group with (or cancels) another event's run on the same PR", () => {
@@ -447,10 +454,9 @@ describe("the autonomy-tier workflow's pull_request_target safety", () => {
     expect(source).not.toMatch(/\$\{\{[^}]*secrets\./);
   });
 
-  it("checks out exactly the base and the head, neither persisting credentials", () => {
-    expect(checkouts).toHaveLength(2);
+  it("checks out exactly one tree, the policy revision, without persisting credentials", () => {
+    expect(checkouts).toHaveLength(1);
     expect(trusted).toBeDefined();
-    expect(subject).toBeDefined();
     for (const c of checkouts) expect(c.with?.["persist-credentials"]).toBe(false);
   });
 
@@ -487,15 +493,16 @@ describe("the autonomy-tier workflow's pull_request_target safety", () => {
     }
   });
 
-  it("nothing in the whole workflow names subject/ but the head checkout's path and the verdict's --subject argument", () => {
+  it("nothing in the whole workflow names subject but the fetch step's store and the verdict's --subject argument", () => {
     // Every string and key in the WHOLE parsed workflow (top-level env and
     // defaults, the job, every step, every run body), with exactly two
-    // exceptions matched by step identity: `with.path` of the head checkout
-    // step, and the one `--subject "$GITHUB_WORKSPACE/subject"` argument of
-    // the verdict step's run body.
-    const SUBJECT_ARG = '--subject "$GITHUB_WORKSPACE/subject"';
+    // exceptions matched by step identity: the store path, twice, in the
+    // fetch step's run body, and once in the verdict's `--subject` argument.
+    const SUBJECT_ARG = `--subject ${STORE}`;
     expect(verdictStep).toBeDefined();
+    expect(fetchStep).toBeDefined();
     expect(verdictStep!.run!.split(SUBJECT_ARG)).toHaveLength(2);
+    expect(fetchStep!.run!.split(STORE)).toHaveLength(3);
     const hits: string[] = [];
     const walk = (v: unknown, at: string): void => {
       if (typeof v === "string") {
@@ -505,9 +512,12 @@ describe("the autonomy-tier workflow's pull_request_target safety", () => {
       } else if (v !== null && typeof v === "object") {
         for (const [k, x] of Object.entries(v)) {
           if (/subject/i.test(k)) hits.push(`${at}.<key ${k}>`);
-          if (v === subject?.with && k === "path" && x === "subject") continue;
           if (v === verdictStep && k === "run" && typeof x === "string") {
             walk(x.replace(SUBJECT_ARG, ""), `${at}.run`);
+            continue;
+          }
+          if (v === fetchStep && k === "run" && typeof x === "string") {
+            walk(x.split(STORE).join(""), `${at}.run`);
             continue;
           }
           walk(x, `${at}.${k}`);
@@ -542,6 +552,86 @@ describe("the autonomy-tier workflow's pull_request_target safety", () => {
   });
 });
 
+// ── A fork PR on pull_request_target (head.repo.id != repository.id) ───────
+
+/** The event context of a FORK PR: the head lives in another repository. */
+function forkCtx(event: string): Ctx {
+  const c = ctxFor(event) as { github: Record<string, unknown> };
+  const ev = c.github.event as Record<string, unknown>;
+  const pr = ev.pull_request as Record<string, unknown> | undefined;
+  if (pr !== undefined) {
+    pr.head = {
+      sha: PR_HEAD,
+      ref: "agent-branch",
+      repo: { id: 2, full_name: "fork/motebit" },
+    };
+    pr.base = { sha: PR_BASE, ref: "main", repo: { id: 1, full_name: "o/r" } };
+  }
+  ev.repository = { id: 1, full_name: "o/r" };
+  c.github.repository = "o/r";
+  return c;
+}
+
+/**
+ * actions/checkout v7's `assertSafePrCheckout`, as its contract reads: on
+ * pull_request_target it refuses a ref naming the PR's head (sha, branch, or
+ * refs/pull/N/head|merge) when the head repository is not the base one,
+ * unless `allow-unsafe-pr-checkout` is set. Mirrored conservatively here.
+ */
+function wouldTripUnsafeCheckoutGuard(step: Step, ctx: Ctx): boolean {
+  const g = (ctx as { github: { event_name: string; event: Record<string, unknown> } }).github;
+  if (g.event_name !== "pull_request_target") return false;
+  const pr = g.event.pull_request as
+    { number: number; head: { sha: string; ref: string; repo: { id: number } } } | undefined;
+  const repo = g.event.repository as { id: number } | undefined;
+  if (pr === undefined || repo === undefined || pr.head.repo.id === repo.id) return false;
+  const raw = String(step.with?.ref ?? "");
+  const ref = raw.startsWith("${{") ? String(evaluate(raw.slice(3, -2).trim(), ctx)) : raw;
+  return [
+    pr.head.sha,
+    pr.head.ref,
+    `refs/heads/${pr.head.ref}`,
+    `refs/pull/${pr.number}/head`,
+    `refs/pull/${pr.number}/merge`,
+  ].includes(ref);
+}
+
+describe("a fork PR on pull_request_target (head.repo.id != repository.id)", () => {
+  it("no checkout step checks out PR code, so actions/checkout's unsafe-PR guard never fires, and no step disables it", () => {
+    for (const e of PHASE_EVENTS.expand) {
+      for (const c of checkouts) {
+        expect(wouldTripUnsafeCheckoutGuard(c, forkCtx(e)), `${e} ${c.name}`).toBe(false);
+        const ref = evaluate(String(c.with?.ref).slice(3, -2).trim(), forkCtx(e));
+        expect([PR_HEAD, MERGE_COMMIT, MG_HEAD], `${e} ${c.name}`).not.toContain(ref);
+        expect(c.with?.repository, "a checkout of another repository").toBeUndefined();
+      }
+    }
+    // Parsed, not the source text: the header names the flag to explain its absence.
+    expect(JSON.stringify(wf)).not.toMatch(/allow-unsafe-pr-checkout/);
+  });
+
+  it("the change is fetched as git objects into a bare store, from this repository, never the fork", () => {
+    expect(fetchStep).toBeDefined();
+    expect(fetchStep!.uses).toBeUndefined();
+    expect(fetchStep!.run).toBe(FETCH_RUN);
+    expect(fetchStep!.run).toMatch(/^git init --quiet --bare /);
+    expect(fetchStep!.run).toContain('"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"');
+    expect(JSON.stringify(fetchStep)).not.toMatch(/head\.repo|head_repo|full_name/);
+    expect(
+      interpolate(String(fetchStep!.env?.EVENT_BASE_SHA), forkCtx("pull_request_target")),
+    ).toBe(PR_BASE);
+    expect(
+      interpolate(String(fetchStep!.env?.EVENT_HEAD_SHA), forkCtx("pull_request_target")),
+    ).toBe(PR_HEAD);
+    expect(interpolate(String(fetchStep!.env?.EVENT_BASE_SHA), forkCtx("merge_group"))).toBe(
+      MG_BASE,
+    );
+    expect(interpolate(String(fetchStep!.env?.EVENT_HEAD_SHA), forkCtx("merge_group"))).toBe(
+      MG_HEAD,
+    );
+  });
+});
+
 // ── Policy provenance (pure) ─────────────────────────────────────────────────
 
 const POLICY = S("c");
@@ -565,7 +655,7 @@ function prov(over: Partial<Provenance> = {}): Provenance {
 }
 const passing: Verdict = { pass: true, prs: [], summary: "autonomy-tier: PASS — ok" };
 
-describe("policy provenance (the authority): the policy that ran is the authorized revision", () => {
+describe("policy provenance (the primary self-check): the policy that ran is the revision selected for the event", () => {
   it("eventPolicyRef derives each event's authorized revision from GitHub-set event fields, as the workflow does", () => {
     const pull_request = { number: 7, base: { sha: PR_BASE }, head: { sha: PR_HEAD } };
     const merge_group = { base_sha: MG_BASE, head_sha: MG_HEAD, head_ref: "r" };
@@ -653,7 +743,7 @@ describe("policy provenance (the authority): the policy that ran is the authoriz
   });
 });
 
-describe("policy provenance: the secondary tripwire (not the authority)", () => {
+describe("policy provenance: the secondary tripwire", () => {
   it("fails when the policy is a head under judgement", () => {
     for (const h of ["evaluated_head_shas", "payload_head_sha", "merge_group_sha"] as const) {
       const p = prov({
@@ -697,7 +787,12 @@ let fixture: {
   base: string;
   head: Record<7 | 8, string>;
   dir: string;
+  /** A bare "base repository" where the PR heads exist only as refs/pull/N/head (fork PRs). */
+  upstream: string;
 };
+
+/** Generous: a loaded machine (the tamper runner runs several copies at once) is slow, never wrong. */
+const E2E_TIMEOUT = 180_000;
 
 function gitIn(cwd: string, ...args: string[]): string {
   return execFileSync(
@@ -741,6 +836,13 @@ beforeAll(() => {
   // A policy checkout whose HEAD is NOT on origin/main.
   gitIn(dir, "clone", "-q", subjectDir, "off-main");
   gitIn(join(dir, "off-main"), "commit", "-q", "--allow-empty", "-m", "unmerged");
+  // The base repository as GitHub serves a fork PR: its head commits are on no
+  // branch of the base repository, only under refs/pull/N/head.
+  gitIn(dir, "clone", "-q", "--bare", subjectDir, "upstream.git");
+  const upstream = join(dir, "upstream.git");
+  gitIn(upstream, "update-ref", "refs/pull/7/head", h7);
+  gitIn(upstream, "update-ref", "refs/pull/8/head", h8);
+  gitIn(upstream, "branch", "-q", "-D", "pr7", "pr8");
   fixture = {
     subject: subjectDir,
     policy: join(dir, "policy"),
@@ -748,8 +850,9 @@ beforeAll(() => {
     base,
     head: { 7: h7, 8: h8 },
     dir,
+    upstream,
   };
-});
+}, E2E_TIMEOUT);
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -788,7 +891,13 @@ async function run(
   event: string,
   pr: 7 | 8,
   state: ReviewState,
-  opts: { autonomyT0?: string; policyRoot?: string; expected?: string; githubSha?: string } = {},
+  opts: {
+    autonomyT0?: string;
+    policyRoot?: string;
+    expected?: string;
+    githubSha?: string;
+    subject?: string;
+  } = {},
 ): Promise<Run> {
   const head = fixture.head[pr];
   const payload =
@@ -832,7 +941,7 @@ async function run(
       "--repository",
       "o/r",
       "--subject",
-      fixture.subject,
+      opts.subject ?? fixture.subject,
     ],
     env,
     opts.policyRoot ?? fixture.policy,
@@ -844,86 +953,142 @@ async function run(
   return { code, verdict: JSON.parse(json) as Verdict, lines };
 }
 
-describe("the expand phase end to end: every event, the same verdict", () => {
-  it("every event gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads", async () => {
-    const cases: { pr: 7 | 8; state: ReviewState; pass: boolean; reason: string }[] = [
-      { pr: 7, state: "machine-only", pass: false, reason: "kill-switch-machine-only" },
-      { pr: 8, state: "machine-only", pass: false, reason: "machine-approved-t1" },
-      { pr: 7, state: "founder-at-head", pass: true, reason: "founder-approved" },
-      { pr: 8, state: "founder-at-head", pass: true, reason: "founder-approved" },
-      { pr: 7, state: "none", pass: true, reason: "no-machine-approval" },
-    ];
-    for (const c of cases) {
-      for (const event of PHASE_EVENTS.expand) {
-        for (const autonomyT0 of ["on", "", undefined]) {
-          const r = await run(event, c.pr, c.state, { autonomyT0 });
-          const label = `${event} #${c.pr} ${c.state} AUTONOMY_T0=${String(autonomyT0)}`;
-          expect(r.verdict.reason, label).toBeUndefined();
-          expect(
-            r.verdict.prs.map((v) => [v.pass, v.reason]),
-            label,
-          ).toEqual([[c.pass, c.reason]]);
-          expect(r.code, label).toBe(c.pass ? 0 : 1);
+describe("the expand script end to end: every event it judges, the same verdict", () => {
+  it(
+    "every event the expand script judges gives the same verdict for the same PR state, whatever AUTONOMY_T0 reads",
+    async () => {
+      const cases: { pr: 7 | 8; state: ReviewState; pass: boolean; reason: string }[] = [
+        { pr: 7, state: "machine-only", pass: false, reason: "kill-switch-machine-only" },
+        { pr: 8, state: "machine-only", pass: false, reason: "machine-approved-t1" },
+        { pr: 7, state: "founder-at-head", pass: true, reason: "founder-approved" },
+        { pr: 8, state: "founder-at-head", pass: true, reason: "founder-approved" },
+        { pr: 7, state: "none", pass: true, reason: "no-machine-approval" },
+      ];
+      for (const c of cases) {
+        for (const event of PHASE_EVENTS.expand) {
+          for (const autonomyT0 of ["on", "", undefined]) {
+            const r = await run(event, c.pr, c.state, { autonomyT0 });
+            const label = `${event} #${c.pr} ${c.state} AUTONOMY_T0=${String(autonomyT0)}`;
+            expect(r.verdict.reason, label).toBeUndefined();
+            expect(
+              r.verdict.prs.map((v) => [v.pass, v.reason]),
+              label,
+            ).toEqual([[c.pass, c.reason]]);
+            expect(r.code, label).toBe(c.pass ? 0 : 1);
+          }
         }
       }
-    }
-  }, 120_000);
+    },
+    E2E_TIMEOUT,
+  );
 
-  it("logs the observed AUTONOMY_T0 and that it is ignored", async () => {
-    const r = await run("pull_request_target", 7, "none", { autonomyT0: "on" });
-    expect(r.lines).toContain(
-      'autonomy-tier: AUTONOMY_T0 observed "on" (expand phase: ignored, switch engaged)',
-    );
-  });
+  it(
+    "logs the observed AUTONOMY_T0 and that it is ignored",
+    async () => {
+      const r = await run("pull_request_target", 7, "none", { autonomyT0: "on" });
+      expect(r.lines).toContain(
+        'autonomy-tier: AUTONOMY_T0 observed "on" (expand phase: ignored, switch engaged)',
+      );
+    },
+    E2E_TIMEOUT,
+  );
 
-  it("logs one provenance line: the policy sha, the API head and the review snapshot judged", async () => {
-    const r = await run("pull_request", 7, "machine-only");
-    const p = r.lines.filter((l) => l.startsWith("autonomy-tier: provenance "));
-    expect(p).toHaveLength(1);
-    const logged = JSON.parse(p[0]!.slice("autonomy-tier: provenance ".length)) as Provenance;
-    expect(logged).toMatchObject({
-      event: "pull_request",
-      phase: "expand",
-      policy_sha: fixture.base,
-      expected_policy_sha: fixture.base,
-      policy_on_main: true,
-      evaluated_head_shas: [fixture.head[7]],
-      merge_group_sha: null,
-      decision: "fail",
-    });
-    expect(logged.reviews).toEqual([
-      {
-        pr: 7,
-        head_sha: fixture.head[7],
-        reviews: [
-          {
-            id: 1,
-            login: MACHINE_REVIEWER,
-            state: "APPROVED",
-            commit_id: fixture.head[7],
-            submitted_at: "2026-10-26T00:00:00Z",
-          },
-        ],
-      },
-    ]);
-  });
+  it(
+    "logs one provenance line: the policy sha, the API head and the review snapshot judged",
+    async () => {
+      const r = await run("pull_request", 7, "machine-only");
+      const p = r.lines.filter((l) => l.startsWith("autonomy-tier: provenance "));
+      expect(p).toHaveLength(1);
+      const logged = JSON.parse(p[0]!.slice("autonomy-tier: provenance ".length)) as Provenance;
+      expect(logged).toMatchObject({
+        event: "pull_request",
+        phase: "expand",
+        policy_sha: fixture.base,
+        expected_policy_sha: fixture.base,
+        policy_on_main: true,
+        evaluated_head_shas: [fixture.head[7]],
+        merge_group_sha: null,
+        decision: "fail",
+      });
+      expect(logged.reviews).toEqual([
+        {
+          pr: 7,
+          head_sha: fixture.head[7],
+          reviews: [
+            {
+              id: 1,
+              login: MACHINE_REVIEWER,
+              state: "APPROVED",
+              commit_id: fixture.head[7],
+              submitted_at: "2026-10-26T00:00:00Z",
+            },
+          ],
+        },
+      ]);
+    },
+    E2E_TIMEOUT,
+  );
 
-  it("fails policy-provenance when the policy checkout is not the expected revision", async () => {
-    for (const event of PHASE_EVENTS.expand) {
-      const r = await run(event, 7, "none", { expected: fixture.head[7] });
-      expect(r.verdict, event).toMatchObject({ pass: false, reason: "policy-provenance" });
-      expect(r.code).toBe(1);
-    }
-  });
+  it(
+    "fails policy-provenance when the policy checkout is not the expected revision",
+    async () => {
+      for (const event of PHASE_EVENTS.expand) {
+        const r = await run(event, 7, "none", { expected: fixture.head[7] });
+        expect(r.verdict, event).toMatchObject({ pass: false, reason: "policy-provenance" });
+        expect(r.code).toBe(1);
+      }
+    },
+    E2E_TIMEOUT,
+  );
 
-  it("fails policy-provenance on a PR event when the policy commit is not on main", async () => {
-    const offMain = gitIn(fixture.offMain, "rev-parse", "HEAD");
-    const r = await run("pull_request_target", 7, "none", {
-      policyRoot: fixture.offMain,
-      expected: offMain,
-      githubSha: offMain,
-    });
-    expect(r.verdict).toMatchObject({ pass: false, reason: "policy-provenance" });
-    expect(r.verdict.summary).toMatch(/not an ancestor of origin\/main/);
-  });
+  it(
+    "fails policy-provenance on a PR event when the policy commit is not on main",
+    async () => {
+      const offMain = gitIn(fixture.offMain, "rev-parse", "HEAD");
+      const r = await run("pull_request_target", 7, "none", {
+        policyRoot: fixture.offMain,
+        expected: offMain,
+        githubSha: offMain,
+      });
+      expect(r.verdict).toMatchObject({ pass: false, reason: "policy-provenance" });
+      expect(r.verdict.summary).toMatch(/not an ancestor of origin\/main/);
+    },
+    E2E_TIMEOUT,
+  );
+
+  it(
+    "the fetch step, run as written, takes a fork PR's head from the base repository's refs/pull/N/head into a bare store the verdict judges from",
+    async () => {
+      // The fork case: the head commits are on no branch of the base repository.
+      expect(gitIn(fixture.upstream, "branch", "--contains", fixture.head[7])).toBe("");
+      for (const event of ["pull_request_target", "merge_group"]) {
+        const ws = realpathSync(mkdtempSync(join(fixture.dir, "ws-")));
+        mkdirSync(join(ws, "trusted"));
+        for (const pr of [7, 8] as const) {
+          execFileSync("bash", ["-e", "-c", fetchStep!.run!], {
+            cwd: join(ws, "trusted"),
+            env: cleanEnv(process.env, {
+              GITHUB_WORKSPACE: ws,
+              GITHUB_SERVER_URL: `file://${fixture.dir}`,
+              GITHUB_REPOSITORY: "upstream.git",
+              EVENT_BASE_SHA: fixture.base,
+              EVENT_HEAD_SHA: fixture.head[pr],
+            }),
+            stdio: "pipe",
+          });
+          const store = join(ws, "subject.git");
+          expect(gitIn(store, "rev-parse", "--is-bare-repository")).toBe("true");
+          expect(gitIn(store, "rev-parse", "refs/autonomy-tier/head")).toBe(fixture.head[pr]);
+          expect(gitIn(store, "rev-parse", "refs/autonomy-tier/base")).toBe(fixture.base);
+          const r = await run(event, pr, "machine-only", { subject: store });
+          expect(r.verdict.reason, `${event} #${pr}`).toBeUndefined();
+          expect(
+            r.verdict.prs.map((v) => v.reason),
+            `${event} #${pr}`,
+          ).toEqual([pr === 7 ? "kill-switch-machine-only" : "machine-approved-t1"]);
+        }
+      }
+    },
+    E2E_TIMEOUT,
+  );
 });
