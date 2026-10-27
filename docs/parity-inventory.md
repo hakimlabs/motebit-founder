@@ -118,3 +118,5 @@ The optional brand (C3, `protocol/src/index.ts:19`) means `const id: MotebitId =
 5. The `_PD2` field-diff probe was throwaway (used to build this inventory; not committed). The shipped dev tool is `__parity/check.ts` + `check.test-types.ts`. On a `private` / `0.0.0-private` package these compile to inert `export {}` in `dist/` and never publish — no tarball-exclusion work needed.
 
 Never weaken the check to pass — fix the divergence (`feedback_coverage_thresholds`-shaped). See `architecture_synchronization_invariants`, `feedback_legibility_ratio`.
+
+<!-- autonomy-tier live matrix (T0, B1): merged on purpose by test M3, reverted by the next PR -->
