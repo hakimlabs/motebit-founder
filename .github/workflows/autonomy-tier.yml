@@ -12,18 +12,63 @@ name: Autonomy tier
 # to judge until the motebit-reviewer account exists.
 #
 # The tier comes from scripts/classify-autonomy-tier.ts and the verdict from
-# scripts/autonomy-tier-verdict.ts — both run from the BASE checkout
+# scripts/autonomy-tier-verdict.ts. Both run from the BASE checkout
 # (`trusted/`), never from the PR head; the head is checked out only as git
-# data (`subject/`) and none of its code runs. (A pull_request run still uses
-# the PR's own copy of THIS file; .github/ is owned in CODEOWNERS, so an edit
-# to it cannot merge without the founder.)
+# data (`subject/`) and none of its code runs.
+#
+# ## Why pull_request_target, and no review trigger
+#
+# Every agent PR comes from a fork. GitHub passes no repository variables to a
+# run triggered by a fork PR's `pull_request` or `pull_request_review` event
+# (docs: "Variables" > "Configuration variables are not passed to workflows
+# that are triggered by a pull request from a fork"), so AUTONOMY_T0 read ''
+# there and the switch could never be off (seen live on #1181, 2026-10-27).
+# Such a run also uses the PR's own copy of THIS file. `pull_request_target`
+# runs this file, and these scripts, from the base branch, with the variables
+# (docs: "Events that trigger workflows" > pull_request_target). Its check run
+# attaches to the PR's HEAD commit, which is where a required check is read
+# (the same holds for `cla` in cla.yml; seen live on #1181's head).
+#
+# There is no base-context review event: `pull_request_review` from a fork is
+# fork-context with no variables, and skipping this job on it is no fix:
+# GitHub reports a skipped job as "Success", even for a required check (docs:
+# "Using conditions to control job execution"). So reviews are re-judged by:
+#
+#  1. merge_group (the authoritative judgement). main-protection requires the
+#     merge queue, and the queue run re-judges every queued PR with its reviews
+#     and the switch AS THEY STAND at queue time, from the API, in a run that
+#     sees the variables. A PR-side pass gone stale (a machine approval or a
+#     dismissed founder approval after the last run) therefore cannot land a
+#     change: the group fails and the PR is dequeued.
+#  2. Any later PR event: a push (`synchronize`; main-protection also dismisses
+#     stale reviews on push) or an edit of the title or body (`edited`).
+#  3. Re-running the job. A re-run re-reads the live reviews, and variables are
+#     read when the job runs. This is how a founder lifts a stale FAIL after
+#     approving (or edit the PR body, which needs no Actions permission).
+#
+# Each verdict reads the reviews and the PR head from the API when it runs,
+# never from the event payload, and refuses to judge a head that has moved.
+#
+# ## pull_request_target safety (the "pwn request" trap)
+#
+# - No PR-head code runs. Scripts and dependencies come only from `trusted/`
+#   (the base, `github.sha`: the commit whose copy of this file is running).
+#   `subject/` is only read by git (rev-list, log, diff); no install, build or
+#   script runs in it. A `.gitattributes` there cannot run a driver: drivers
+#   come from git config, which the checkout does not take from the tree.
+# - Read-only token (contents, pull-requests), no secrets, and
+#   persist-credentials: false on both checkouts.
+# - No event field is interpolated into a `run:` script; the script reads the
+#   event file itself.
+# - No dependency cache (a cache is the one thing a PR run could write that a
+#   base run reads).
+#
+# The verdict script refuses every event but pull_request_target and
+# merge_group (`judgedEvent`), so a trigger added back here fails closed.
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, edited]
-  # An approval, an edited review, or a dismissal changes the verdict.
-  pull_request_review:
-    types: [submitted, edited, dismissed]
   # The merge queue (docs/ops/merge-queue.md): judged again against the exact
   # commits the queue builds, with the reviews as they stand at queue time.
   merge_group:
@@ -46,7 +91,10 @@ jobs:
       - name: Check out the base (the classifier and CODEOWNERS that judge)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          # pull_request_target: github.sha is the base branch's tip, the
+          # commit this workflow file was read from. merge_group: the group's
+          # base (github.sha there is the queue commit, PR code included).
+          ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.sha }}
           path: trusted
           persist-credentials: false
 

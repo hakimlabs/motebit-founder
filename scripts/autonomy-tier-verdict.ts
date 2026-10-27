@@ -37,7 +37,15 @@
  * that names no PR, a PR named on more than one commit, or a queue ref
  * naming a PR not in the group, fails.
  *
- * PURE core (`decidePr`, `decide`, `standingStates`); the CLI is I/O only.
+ * Events: only `pull_request_target` and `merge_group` are judged
+ * (`judgedEvent`). Every agent PR comes from a fork, and a fork PR's
+ * `pull_request` / `pull_request_review` run gets no repository variables
+ * (`AUTONOMY_T0` reads `''`, so the switch reads engaged whatever its value)
+ * and runs the PR's own copy of the workflow. A verdict from such a run is
+ * not trustworthy in either direction, so it is refused, never computed.
+ *
+ * PURE core (`decidePr`, `decide`, `standingStates`, `judgedEvent`); the CLI
+ * is I/O only.
  * Any API or git error fails the check (non-zero exit): an unprovable "no
  * machine approval" is not a pass.
  */
@@ -272,6 +280,20 @@ interface EventPayload {
   merge_group?: { base_sha: string; head_sha: string; head_ref: string };
 }
 
+/**
+ * The events whose runs may judge, and how each is judged. Both see the
+ * repository variables (the kill switch) even for a fork PR. Any other event,
+ * `pull_request` and `pull_request_review` above all, throws: from a fork
+ * they carry no variables and run the PR's own copy of the workflow.
+ */
+export function judgedEvent(eventName: string): "pull-request" | "merge-group" {
+  if (eventName === "pull_request_target") return "pull-request";
+  if (eventName === "merge_group") return "merge-group";
+  throw new Error(
+    `unsupported event '${eventName}': the autonomy-tier verdict is computed only on pull_request_target and merge_group (a fork PR's pull_request / pull_request_review run gets no repository variables and runs the PR's own workflow copy)`,
+  );
+}
+
 function argValue(argv: readonly string[], flag: string): string | undefined {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : undefined;
@@ -295,7 +317,8 @@ export async function main(
   const event = JSON.parse(readFileSync(eventPath, "utf-8")) as EventPayload;
   const prs: PrInput[] = [];
 
-  if (eventName === "pull_request" || eventName === "pull_request_review") {
+  const kind = judgedEvent(eventName);
+  if (kind === "pull-request") {
     const pr = event.pull_request;
     if (!pr) throw new Error(`${eventName} event has no pull_request`);
     const c = classifyRevisions(subject, pr.base.sha, pr.head.sha);
@@ -313,7 +336,7 @@ export async function main(
       ...tierOf(c),
       reviews: await fetchReviews(repoName, pr.number, token),
     });
-  } else if (eventName === "merge_group") {
+  } else {
     const mg = event.merge_group;
     if (!mg) throw new Error("merge_group event has no merge_group");
     const shas = git(subject, [
@@ -347,8 +370,6 @@ export async function main(
         reviews: await fetchReviews(repoName, number, token),
       });
     }
-  } else {
-    throw new Error(`unsupported event ${eventName}`);
   }
 
   const verdict = decide(prs, env.AUTONOMY_T0);

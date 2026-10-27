@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Tamper check for classify-autonomy-tier.test.ts and autonomy-tier-verdict.test.ts.
+// Tamper check for classify-autonomy-tier.test.ts, autonomy-tier-verdict.test.ts
+// and autonomy-tier-workflow.test.ts.
 //
 // Each entry reverts (part of) one rule of the autonomy boundary — an
 // allowlist exclusion, a widening of the allowlist, a fail-closed rule, the
@@ -18,6 +19,8 @@ const CLASSIFIER = "scripts/classify-autonomy-tier.ts";
 const VERDICT = "scripts/autonomy-tier-verdict.ts";
 const CLASSIFIER_TEST = "scripts/__tests__/classify-autonomy-tier.test.ts";
 const VERDICT_TEST = "scripts/__tests__/autonomy-tier-verdict.test.ts";
+const WORKFLOW = ".github/workflows/autonomy-tier.yml";
+const WORKFLOW_TEST = "scripts/__tests__/autonomy-tier-workflow.test.ts";
 
 const T1 = (name) => `must-T1 fixtures T1: ${name}`;
 const OFF = (text) => text.replace(/^(\s*(?:else )?)if \(/, "$1if ((false as boolean) && ");
@@ -261,6 +264,119 @@ const TAMPERS = [
     "mergeGroupPrs fails closed when one PR is named on more than one commit",
     VERDICT_TEST,
   ),
+
+  // The trigger defect (#1181, 2026-10-27): a fork PR's pull_request /
+  // pull_request_review run gets no repository variables, so the kill switch
+  // read '' and could never be off. And the pull_request_target safety rules.
+  {
+    name: "verdict: a pull_request run is judged again",
+    file: VERDICT,
+    text: '  if (eventName === "pull_request_target") return "pull-request";',
+    replacement:
+      '  if (eventName === "pull_request_target" || eventName === "pull_request") return "pull-request";',
+    red: "judgedEvent: only events that see the repository variables are judged refuses pull_request and pull_request_review (fork runs carry no variables)",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: back on pull_request (fork runs get no variables)",
+    file: WORKFLOW,
+    text: "  pull_request_target:\n    branches: [main]",
+    replacement: "  pull_request:\n    branches: [main]",
+    red: "the autonomy-tier workflow's triggers triggers on pull_request_target and merge_group only",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: the pull_request_review trigger is back",
+    file: WORKFLOW,
+    text: "  merge_group:\n    types: [checks_requested]\n",
+    replacement:
+      "  merge_group:\n    types: [checks_requested]\n  pull_request_review:\n    types: [submitted, edited, dismissed]\n",
+    red: "the autonomy-tier workflow's triggers triggers on pull_request_target and merge_group only",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: a push is no longer re-judged",
+    file: WORKFLOW,
+    text: "types: [opened, synchronize, reopened, ready_for_review, edited]",
+    replacement: "types: [opened, reopened, ready_for_review, edited]",
+    red: "the autonomy-tier workflow's triggers pull_request_target covers every PR-side change into main",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: the job is skipped on some event (a skip reports success)",
+    file: WORKFLOW,
+    text: "    runs-on: ubuntu-latest\n",
+    replacement: "    if: github.event_name != 'pull_request_review'\n    runs-on: ubuntu-latest\n",
+    red: "the autonomy-tier workflow's triggers is one job named autonomy-tier with no job-level if (a skipped job reports success)",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: the kill switch is no longer read from the variable",
+    file: WORKFLOW,
+    text: "          AUTONOMY_T0: ${{ vars.AUTONOMY_T0 }}\n",
+    replacement: "          AUTONOMY_T0: on\n",
+    red: "the autonomy-tier workflow's triggers reads the kill switch from the repository variable on the verdict step",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: the token gains a write scope",
+    file: WORKFLOW,
+    text: "  pull-requests: read\n",
+    replacement: "  pull-requests: read\n  actions: write\n",
+    red: "the autonomy-tier workflow's pull_request_target safety has a read-only token: contents and pull-requests read, nothing else, no job override",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: a secret is referenced",
+    file: WORKFLOW,
+    text: "          GH_TOKEN: ${{ github.token }}\n",
+    replacement: "          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n",
+    red: "the autonomy-tier workflow's pull_request_target safety references no secrets",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: the head checkout persists the token",
+    file: WORKFLOW,
+    text: "          path: subject\n          # The three-dot diff needs the merge base; the merge group needs base..head.\n          fetch-depth: 0\n          persist-credentials: false\n",
+    replacement:
+      "          path: subject\n          # The three-dot diff needs the merge base; the merge group needs base..head.\n          fetch-depth: 0\n          persist-credentials: true\n",
+    red: "the autonomy-tier workflow's pull_request_target safety checks out exactly the base and the head, neither persisting credentials",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: the trusted checkout is the PR head (the pwn request)",
+    file: WORKFLOW,
+    text: "|| github.sha }}\n          path: trusted",
+    replacement: "|| github.event.pull_request.head.sha }}\n          path: trusted",
+    red: "the autonomy-tier workflow's pull_request_target safety the trusted checkout is the base, never the PR head",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: a script runs in the PR head",
+    file: WORKFLOW,
+    text: "      - name: Install the base's dependencies (uncached)\n        working-directory: trusted\n",
+    replacement:
+      "      - name: Install the base's dependencies (uncached)\n        working-directory: subject\n",
+    red: "the autonomy-tier workflow's pull_request_target safety every run step works in trusted/, never in the PR head",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: an event field is interpolated into the script",
+    file: WORKFLOW,
+    text: '          --event-name "$GITHUB_EVENT_NAME"\n',
+    replacement:
+      '          --event-name "$GITHUB_EVENT_NAME" # ${{ github.event.pull_request.title }}\n',
+    red: "the autonomy-tier workflow's pull_request_target safety interpolates no expression into a run script (event fields reach it only by file)",
+    test: WORKFLOW_TEST,
+  },
+  {
+    name: "workflow: the dependency cache is switched back on",
+    file: WORKFLOW,
+    text: "          package-manager-cache: false\n",
+    replacement: "          package-manager-cache: false\n          cache: pnpm\n",
+    red: "the autonomy-tier workflow's pull_request_target safety takes the package manager from the base and keeps the dependency cache off",
+    test: WORKFLOW_TEST,
+  },
 ];
 
 // Run as a command with a red marker; `-t`, anchored to the exact full name,
