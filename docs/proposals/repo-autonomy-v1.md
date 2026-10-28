@@ -108,7 +108,7 @@ Done:
 - `motebit-reviewer` exists with write access.
 - The classifier and the `autonomy-tier` check are on `main` (#1177, #1183, #1184), required in `main-protection` and pinned to the Actions app.
 - All 106 adversarial tampers turn a test red.
-- The contract-phase live matrix passed every row (M1–M7, R1–R3). One T0 change merged on a machine-only approval with the switch `on` (M3), and a founder-approved PR reverted it.
+- The contract-phase live matrix passed every row it ran (M1–M7, R1–R3). The T0 variant of M7, a removed reviewer with the switch `on`, was not run and needs a new token. One T0 change merged on a machine-only approval with the switch `on` (M3), and a founder-approved PR reverted it.
 
 Not built:
 
