@@ -35,6 +35,20 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 // embedded in test files — the same reasoning the maxForks/concurrency comment
 // endorses. relay tests finish in ms–low-seconds (drain-grace fix), so 20s is pure
 // headroom, never masking a genuinely slow test.
+// MOTEBIT_RELAY_MAX_WORKERS widens the pool when relay runs ALONE: CI's solo
+// coverage shard sets it to the runner's CPU count (scripts/test-coverage-
+// shards.ts shardEnv; turbo.json passThroughEnv carries it to vitest). Unset or
+// empty keeps 2. Anything else is refused, never silently ignored.
+function relayMaxWorkers(): number {
+  const raw = process.env.MOTEBIT_RELAY_MAX_WORKERS;
+  if (raw === undefined || raw === "") return 2;
+  if (!/^[1-9]\d*$/.test(raw))
+    throw new Error(
+      `MOTEBIT_RELAY_MAX_WORKERS=${JSON.stringify(raw)} is not a positive integer. Unset it for the default (2), or set the runner's CPU count.`,
+    );
+  return Number(raw);
+}
+
 export default defineMotebitTest({
   // Per-file floors on the money/identity code, plus a package aggregate.
   //
@@ -77,7 +91,7 @@ export default defineMotebitTest({
     // a repair line naming the injection helper. See network-guard.setup.ts.
     setupFiles: ["./src/__tests__/network-guard.setup.ts"],
     pool: "forks",
-    maxWorkers: 2,
+    maxWorkers: relayMaxWorkers(),
     minWorkers: 1,
     testTimeout: 20_000,
     hookTimeout: 20_000,

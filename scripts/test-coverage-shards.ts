@@ -214,13 +214,38 @@ export function turboArgs(dirs: readonly string[]): string[] {
   return ["run", "test:coverage", "--concurrency=4", ...dirs.map((d) => `--filter=./${d}`)];
 }
 
-/** Launches `turbo <args>`; returns the child's exit status (null when killed by a signal). */
-export type TurboSpawn = (args: string[]) => { status: number | null; error?: Error };
+/**
+ * Relay's vitest fork pool when it runs ALONE on a CI runner. Its default of 2
+ * (services/relay/vitest.config.ts) leaves room for co-scheduled turbo tasks;
+ * the solo shard has none, and at 2 it ran median 27.4 min of a 30-min limit
+ * (2026-10-28). 4 = the GitHub runner's CPU count; the same suite took 575s at
+ * 2 and 281s at 4 on one machine. Passed as an env var, not a CLI flag, so
+ * turboArgs (pinned by check-prepush-subset) is unchanged; turbo.json's
+ * passThroughEnv is what lets it reach vitest under strict env mode.
+ */
+export const SOLO_RELAY_MAX_WORKERS = "4";
+
+/** Extra environment for a shard's turbo run: only the solo relay shard gets any. */
+export function shardEnv(dirs: readonly string[]): Record<string, string> {
+  return dirs.length === 1 && dirs[0] === SOLO
+    ? { MOTEBIT_RELAY_MAX_WORKERS: SOLO_RELAY_MAX_WORKERS }
+    : {};
+}
+
+/** Launches `turbo <args>` with `env` added; returns the child's exit status (null when killed by a signal). */
+export type TurboSpawn = (
+  args: string[],
+  env: Record<string, string>,
+) => { status: number | null; error?: Error };
 
 /** The real launcher: the workspace's own turbo binary, output inherited. */
 export function spawnTurbo(root: string): TurboSpawn {
-  return (args) =>
-    spawnSync(join(root, "node_modules", ".bin", "turbo"), args, { cwd: root, stdio: "inherit" });
+  return (args, env) =>
+    spawnSync(join(root, "node_modules", ".bin", "turbo"), args, {
+      cwd: root,
+      stdio: "inherit",
+      env: { ...process.env, ...env },
+    });
 }
 
 /**
@@ -230,7 +255,7 @@ export function spawnTurbo(root: string): TurboSpawn {
  * (stub turbo exiting non-zero, argv recorded) on every `pnpm check`.
  */
 export function runShard(dirs: readonly string[], spawn: TurboSpawn): number {
-  const r = spawn(turboArgs(dirs));
+  const r = spawn(turboArgs(dirs), shardEnv(dirs));
   if (r.error) throw r.error;
   return r.status ?? 1;
 }

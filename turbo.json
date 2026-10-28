@@ -36,7 +36,8 @@
     },
     "test:coverage": {
       "dependsOn": ["build"],
-      "cache": false
+      "cache": false,
+      "passThroughEnv": ["MOTEBIT_RELAY_MAX_WORKERS"]
     },
     "typecheck": {
       "dependsOn": ["build"],
