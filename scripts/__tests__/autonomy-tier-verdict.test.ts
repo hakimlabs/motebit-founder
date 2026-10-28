@@ -74,7 +74,7 @@ function oracle(
   _other: Other,
   killVar: string | undefined,
 ): boolean {
-  // Any APPROVED review by the machine login binds for good, whatever came after.
+  // Any review by the machine login still in state APPROVED binds, whatever came after.
   const machineApproved = machine !== "none" && machine !== "commented";
   const founderApproved =
     founder === "head" &&
