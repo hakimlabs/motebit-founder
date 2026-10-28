@@ -32,6 +32,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,15 +80,6 @@ exit 0
 
 let base: string;
 let shimDir: string;
-/**
- * The hook's own TMPDIR: short, because tsx's CLI listens on a unix socket
- * `$TMPDIR/tsx-<uid>/<pid>.pipe` and the hook runs tsx nested (the verify
- * lock, then the scripts/ readers helper). Under a long TMPDIR (the tamper
- * runner's slot dirs) the socket path passes the 104-byte macOS limit, is
- * truncated, and the two live tsx processes collide (EADDRINUSE) — the
- * helper then fails closed and every scripts/ narrowing case reads as ALL.
- */
-let hookTmp: string;
 
 function git(cwd: string, ...args: string[]): string {
   const r = spawnSync("git", args, {
@@ -145,6 +137,11 @@ function repoWith(change: Record<string, string>, opts: RepoOpts = {}): string {
   // The scripts/ readers fixture: packages/leaf's tamper file imports the
   // runner, which imports a core module; one script is a globalDependency.
   write(dir, "turbo.json", JSON.stringify({ globalDependencies: ["scripts/global-dep.ts"] }));
+  // The hook runs the helper as `node --import tsx …`, resolved from the
+  // repo: the fixture borrows the real node_modules (ignored, so never a
+  // changed path).
+  symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"));
+  write(dir, ".gitignore", "node_modules\n");
   write(dir, "scripts/global-dep.ts", "export {};\n");
   write(dir, "scripts/lib/tamper-runner.ts", 'export { core } from "./tamper-core.ts";\n');
   write(dir, "scripts/lib/tamper-core.ts", "export const core = 1;\n");
@@ -215,7 +212,6 @@ function runHook(repo: string, env: Record<string, string> = {}): Run {
       SHIM_LOG: log,
       // Each run's own lock file: the fixture runs never wait on a real push.
       MOTEBIT_VERIFY_LOCK_FILE: join(repo, "..", `${repo.split("/").pop()}-verify.lock`),
-      TMPDIR: hookTmp,
       ...env,
     },
   });
@@ -234,12 +230,10 @@ beforeAll(() => {
   mkdirSync(shimDir);
   writeFileSync(join(shimDir, "pnpm"), SHIM);
   chmodSync(join(shimDir, "pnpm"), 0o755);
-  hookTmp = mkdtempSync("/tmp/pph-");
 });
 
 afterAll(() => {
   rmSync(base, { recursive: true, force: true });
-  rmSync(hookTmp, { recursive: true, force: true });
 });
 
 describe("pre-push hook — pushed from a LINKED worktree (#835, 2026-10-02)", () => {

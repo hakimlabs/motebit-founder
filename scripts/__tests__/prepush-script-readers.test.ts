@@ -11,7 +11,15 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,6 +81,7 @@ function git(cwd: string, ...args: string[]): void {
 function fixture(
   files: Record<string, string>,
   turbo: unknown = { globalDependencies: [] },
+  untracked: Record<string, string> = {},
 ): string {
   const dir = join(base, `fx-${n++}`);
   const all: Record<string, string> = {
@@ -87,16 +96,34 @@ function fixture(
     "scripts/check.ts": "export {};\n",
     "scripts/lib/core.ts": "export const core = 1;\n",
     "scripts/lib/runner.ts": 'import { core } from "./core.js";\nexport const run = core;\n',
+    // The CLI runs as `node --import tsx …` from the repo: borrow the real
+    // node_modules, ignored like the real one.
+    ".gitignore": "node_modules\n",
     ...files,
   };
-  for (const [rel, content] of Object.entries(all)) {
+  const put = (rel: string, content: string) => {
     mkdirSync(dirname(join(dir, rel)), { recursive: true });
     writeFileSync(join(dir, rel), content);
-  }
+  };
+  for (const [rel, content] of Object.entries(all)) put(rel, content);
+  symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"));
   git(dir, "init", "-q");
   git(dir, "add", "-A");
+  for (const [rel, content] of Object.entries(untracked)) put(rel, content);
   return dir;
 }
+
+/** The helper's CLI, run as the hook runs it, in `repo`. */
+function cli(repo: string, input: string) {
+  return spawnSync(process.execPath, ["--import", "tsx", join(ROOT, HELPER)], {
+    cwd: repo,
+    input,
+    encoding: "utf8",
+    env: cleanEnv(),
+  });
+}
+
+const C_TEST = "packages/c/src/__tests__/x.test.ts";
 
 const TAMPER_READS_RUNNER = {
   "packages/a/tamper/t.mjs": 'import { run } from "../../../scripts/lib/runner.ts";\nrun;\n',
@@ -266,33 +293,167 @@ describe("prepush-script-readers — fail closed to every package", () => {
 
   it("a package invoking a root package.json script by name", () => {
     const repo = fixture({
-      "packages/c/package.json": '{ "name": "c", "scripts": { "test": "pnpm -w check" } }\n',
+      "packages/c/package.json": '{ "name": "c", "scripts": { "lint": "pnpm -w check" } }\n',
     });
     expect(scriptReaders(repo, ["scripts/lib/core.ts"])).toMatchObject({ all: true });
   });
 
   it("a helper error (unreadable turbo.json): the CLI prints __ALL__ and __END__", () => {
     const repo = fixture({ "turbo.json": "{ not json" });
-    const r = spawnSync(join(ROOT, "node_modules", ".bin", "tsx"), [join(ROOT, HELPER)], {
-      cwd: repo,
-      input: "scripts/check.ts\n",
-      encoding: "utf8",
-      env: cleanEnv(),
-    });
+    const r = cli(repo, "scripts/check.ts\n");
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^__ALL__ helper error: .*\n__END__\n$/);
   });
 
   it("the CLI prints the reader dirs then __END__", () => {
     const repo = fixture(TAMPER_READS_RUNNER);
-    const r = spawnSync(join(ROOT, "node_modules", ".bin", "tsx"), [join(ROOT, HELPER)], {
-      cwd: repo,
-      input: "scripts/lib/core.ts\n",
-      encoding: "utf8",
-      env: cleanEnv(),
-    });
+    const r = cli(repo, "scripts/lib/core.ts\n");
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toBe("packages/a\n__END__\n");
+  });
+});
+
+const C_ONLY = { all: false, dirs: ["packages/c"] };
+
+describe("prepush-script-readers — review round 2 (F1–F5)", () => {
+  it("F1: a path cut short by an interpolation is a prefix of every script it can name", () => {
+    const repo = fixture({ [C_TEST]: "const p = `../../../../scripts/lib/co${name}.ts`;\n" });
+    expect(scriptReaders(repo, ["scripts/lib/core.ts"])).toEqual(C_ONLY);
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual({ all: false, dirs: [] });
+  });
+
+  it("F1: a glob path is a prefix of every script it can name", () => {
+    const repo = fixture({ [C_TEST]: 'const g = "../../../../scripts/che*.ts";\n' });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual(C_ONLY);
+  });
+
+  it('F2: a "scripts" segment in a multi-line join reads the whole root scripts/ dir', () => {
+    const repo = fixture({
+      [C_TEST]: 'const p = join(\n  ROOT,\n  "scripts",\n  "check.ts",\n);\n',
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual(C_ONLY);
+  });
+
+  it('F2: a "scripts" segment in an array joined into a path', () => {
+    const repo = fixture({ [C_TEST]: 'const p = [here, "scripts", "check.ts"].join("/");\n' });
+    expect(scriptReaders(repo, ["scripts/lib/core.ts"])).toEqual(C_ONLY);
+  });
+
+  it('F2 control: a provably package-local "scripts" (own scripts/ dir, no root) is not the root\'s', () => {
+    const repo = fixture({
+      "packages/c/scripts/build.ts": "export {};\n",
+      "packages/c/src/skills.ts": 'const AUX_DIRS = ["scripts", "assets"] as const;\n',
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual({ all: false, dirs: [] });
+  });
+
+  it("T1: a relative string literal a closure file reads (an fs read) is in the closure", () => {
+    const repo = fixture({
+      ...TAMPER_READS_RUNNER,
+      "scripts/lib/runner.ts":
+        'import { core } from "./core.js";\nexport const data = readFileSync(new URL("./data.json", import.meta.url));\nexport const run = core;\n',
+      "scripts/lib/data.json": "{}\n",
+    });
+    expect(scriptReaders(repo, ["scripts/lib/data.json"])).toEqual({
+      all: false,
+      dirs: ["packages/a"],
+    });
+  });
+
+  it("T2: a scripts/ path a closure file runs (`tsx scripts/x`) is in the closure", () => {
+    const repo = fixture({
+      ...TAMPER_READS_RUNNER,
+      "scripts/lib/runner.ts": 'spawnSync("tsx", ["scripts/check.ts"]);\nexport const run = 1;\n',
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual({
+      all: false,
+      dirs: ["packages/a"],
+    });
+  });
+
+  it("T3: a referenced directory reads the closure of every file under it", () => {
+    const repo = fixture({
+      [C_TEST]: 'const dir = "../../../../scripts/lib";\n',
+      "scripts/lib/core.ts": 'export { x as core } from "../check.ts";\n',
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual(C_ONLY);
+  });
+
+  it("T4: `$TURBO_ROOT$/scripts/…` is the root's even when the package has that path", () => {
+    const repo = fixture({
+      "packages/c/scripts/check.ts": "export {};\n",
+      "packages/c/turbo.json": JSON.stringify({
+        extends: ["//"],
+        tasks: { build: { inputs: ["$TURBO_ROOT$/scripts/check.ts"] } },
+      }),
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual(C_ONLY);
+  });
+
+  it("T5: a package running pnpm from the repo root (`--dir ../..`) is ALL", () => {
+    const repo = fixture({
+      "packages/c/package.json":
+        '{ "name": "c", "scripts": { "lint": "pnpm --dir ../.. check" } }\n',
+    });
+    expect(scriptReaders(repo, ["scripts/lib/core.ts"])).toMatchObject({ all: true });
+  });
+
+  it("T6: an UNTRACKED package file's reference counts", () => {
+    const repo = fixture({}, undefined, {
+      [C_TEST]: 'const p = "../../../../scripts/check.ts";\n',
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual(C_ONLY);
+  });
+
+  it("F3: a package file reaching an executable non-package file reads what that file runs", () => {
+    const repo = fixture({
+      [C_TEST]: 'execFileSync("node", ["../../../../examples/run.mjs"]);\n',
+      "examples/run.mjs": 'execFileSync("sh", ["examples/lib/go.sh"]);\n',
+      "examples/lib/go.sh": "npx tsx scripts/check.ts\n",
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual(C_ONLY);
+  });
+
+  it("rule 5: a package with a test script and no vite/vitest config of its own is ALL", () => {
+    const repo = fixture({
+      "packages/c/package.json": '{ "name": "c", "scripts": { "test": "vitest run" } }\n',
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toMatchObject({ all: true });
+  });
+
+  it("rule 5 control: with its own vitest config, it is not", () => {
+    const repo = fixture({
+      "packages/c/package.json": '{ "name": "c", "scripts": { "test": "vitest run" } }\n',
+      "packages/c/vitest.config.ts": "export default {};\n",
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual({ all: false, dirs: [] });
+  });
+
+  it("F4: code after a closing block comment on the same line is a reference", () => {
+    const repo = fixture({
+      [C_TEST]: '/* the gate */ const p = "../../../../scripts/check.ts";\n',
+    });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual(C_ONLY);
+  });
+
+  it("F4: `cd ../.. && …` in a package script is ALL", () => {
+    const repo = fixture({
+      "packages/c/package.json":
+        '{ "name": "c", "scripts": { "lint": "cd ../.. && pnpm check" } }\n',
+    });
+    expect(scriptReaders(repo, ["scripts/lib/core.ts"])).toMatchObject({ all: true });
+  });
+
+  it("F4: `turbo run //#…` (a root task) in a package script is ALL", () => {
+    const repo = fixture({
+      "packages/c/package.json": '{ "name": "c", "scripts": { "lint": "turbo run //#check" } }\n',
+    });
+    expect(scriptReaders(repo, ["scripts/lib/core.ts"])).toMatchObject({ all: true });
+  });
+
+  it("F4: script paths match case-insensitively (a case-insensitive filesystem)", () => {
+    const repo = fixture({ [C_TEST]: 'const p = "../../../../scripts/Check.ts";\n' });
+    expect(scriptReaders(repo, ["scripts/check.ts"])).toEqual(C_ONLY);
   });
 });
 
@@ -300,7 +461,7 @@ describe("prepush-script-readers — the hook calls it", () => {
   const hook = readFileSync(join(ROOT, ".husky/pre-push"), "utf8");
 
   it(".husky/pre-push runs this helper from the repo root", () => {
-    expect(hook).toContain(`tsx ${HELPER}`);
+    expect(hook).toContain(`node --import tsx ${HELPER}`);
   });
 
   it("check-prepush-subset accepts the call, and refuses it with arguments", () => {

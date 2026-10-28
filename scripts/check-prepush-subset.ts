@@ -313,7 +313,7 @@ export const PINNED_FUNCTIONS: Record<string, string> = {
   skip_phase: "f3194ff4fb1a93f9",
   changed_files: "2d6237cb53d2691a",
   format_changed: "620fef7d17b67873",
-  scope_script_readers: "4506065556219026",
+  scope_script_readers: "a9ce51a1db6bbc47",
 };
 
 /**
