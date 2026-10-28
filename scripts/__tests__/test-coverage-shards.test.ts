@@ -6,7 +6,9 @@
  * mislabelled shard manifest are each RED.
  */
 import { describe, it, expect } from "vitest";
-import { dirname, resolve } from "node:path";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   SHARD_WEIGHTS,
@@ -16,6 +18,7 @@ import {
   readPackageScripts,
   runShard,
   shardEnv,
+  spawnTurbo,
   turboArgs,
   verifyManifests,
   verifyPartition,
@@ -177,5 +180,40 @@ describe("runShard — what a shard launches and the exit it returns", () => {
     expect(() =>
       runShard(a.shards[1]!, () => ({ status: null, error: new Error("ENOENT turbo") })),
     ).toThrow("ENOENT turbo");
+  });
+});
+
+describe("the solo shard's worker setting reaches vitest (both delivery links are load-bearing)", () => {
+  it("spawnTurbo hands the shard env to the child turbo, on top of the inherited environment", () => {
+    // A stub workspace whose `turbo` records the two variables it was given.
+    const root = mkdtempSync(join(tmpdir(), "shard-env-"));
+    try {
+      mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
+      const out = join(root, "seen.txt");
+      const stub = join(root, "node_modules", ".bin", "turbo");
+      writeFileSync(
+        stub,
+        `#!/bin/sh\nprintf '%s|%s' "$MOTEBIT_RELAY_MAX_WORKERS" "$PATH" > "${out}"\n`,
+      );
+      chmodSync(stub, 0o755);
+      const r = spawnTurbo(root)(turboArgs([SOLO]), shardEnv([SOLO]));
+      expect(r.status).toBe(0);
+      const [workers, path] = readFileSync(out, "utf8").split("|");
+      expect(workers).toBe("4");
+      expect(path).toBe(process.env.PATH);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("turbo.json passes MOTEBIT_RELAY_MAX_WORKERS through strict env mode to test:coverage", () => {
+    // Without this, turbo strips the variable before vitest starts and relay
+    // silently drops back to 2 workers (proven live in the PR that added it).
+    const turbo = JSON.parse(readFileSync(join(ROOT, "turbo.json"), "utf8")) as {
+      tasks: Record<string, { passThroughEnv?: string[] }>;
+    };
+    expect(turbo.tasks["test:coverage"]?.passThroughEnv).toContain(
+      Object.keys(shardEnv([SOLO]))[0],
+    );
   });
 });
