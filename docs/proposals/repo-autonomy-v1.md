@@ -17,7 +17,12 @@ So the tiers already exist. They only lack an approver that is not the founder.
 
 **T0, autonomous:** a PR whose every changed path is **unowned** in `CODEOWNERS` **and** outside the T0 exclusions below. A new machine user, `motebit-reviewer`, with **write** access (not a code owner, never in `CODEOWNERS`), approves and enqueues it when all of the following hold.
 
-**T0 is an allowlist, deny by default (revision 3).** A cold review of the first classifier built 16 diffs that a denylist labelled T0 while weakening enforcement. Examples: editing a cold reviewer's own prompt; weakening a money-path test through a template-literal import or an unowned barrel; `it["skip"]`; a vitest setup stub that redefines `toBe`; a release script that runs with publish rights. A list of dangerous things always misses one. So T0 is a **small closed allowlist** of inert paths: `docs/**/*.md` excluding `docs/doctrine/`, `docs/proposals/`, `docs/ops/`, `docs/design/`, `docs/operator/`, `docs/drift-defenses.md`, and any agent-instruction name (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `SKILL.md`), with exclusions matched case-insensitively; plus `scripts/bench/**/*.json`.
+**T0 is an allowlist, deny by default (revision 3).** A cold review of the first classifier built 16 diffs that a denylist labelled T0 while weakening enforcement. Examples: editing a cold reviewer's own prompt; weakening a money-path test through a template-literal import or an unowned barrel; `it["skip"]`; a vitest setup stub that redefines `toBe`; a release script that runs with publish rights. A list of dangerous things always misses one. So T0 is a **small closed allowlist** of inert paths:
+
+- `docs/**/*.md`, excluding `docs/doctrine/`, `docs/proposals/`, `docs/ops/`, `docs/design/`, `docs/operator/`, `docs/security/`, `docs/drift-defenses.md`, and any agent-instruction name (`CLAUDE.md`, `AGENTS.md`, `.claude/`, `SKILL.md` and siblings). Exclusions match case-insensitively.
+- each bench's `scripts/bench/*/prompts.json`, and no other JSON file there.
+
+The canonical list is `ALLOWLIST` in [`scripts/classify-autonomy-tier.ts`](../../scripts/classify-autonomy-tier.ts). Its test asserts the exact set, so this paragraph summarizes it and never overrides it.
 
 **Docs-site MDX is not inert, and is not on the list.** A second cold review proved two separate ways it runs code:
 
@@ -67,17 +72,26 @@ It classifies the whole diff (content, not just the file list), so a T0 file can
 4. The tier is decided by a deterministic classifier, not by the reviewing agent. It's a committed script, `scripts/classify-autonomy-tier.ts`, which is itself an owned path. It reads the PR's diff and prints `T0` or `T1` with the rule that fired, and it covers `CODEOWNERS` ownership plus exclusions 1–5. `motebit-reviewer` refuses to approve unless it prints `T0`.
 5. The approval body is a **receipt**: what was checked, with the run ids and the review verdict.
 
-**Enforced by GitHub, not by the agent's good behaviour.** A required status check, `autonomy-tier`, runs the same classifier in CI on every PR **and on the `merge_group` event**, so it is judged against the exact commit the merge queue builds, not only the PR head. The check passes in three cases:
+**Enforced by GitHub, not by the agent's good behaviour.** A required status check, `autonomy-tier`, runs the same classifier in CI. It runs on `pull_request_target`, with the policy taken from `main`, and **on the `merge_group` event**. The `merge_group` run is the deciding one: it judges the exact commit the merge queue builds, against the approvals as they stand when the queue builds it. A PR-level result can be stale. As built ([`scripts/autonomy-tier-verdict.ts`](../../scripts/autonomy-tier-verdict.ts)), the check passes in three cases:
 
-- the PR classifies as T0;
-- `hakimlabs` has approved it;
-- no approval from `motebit-reviewer` is present.
+- `hakimlabs` approved the PR's **current head**, with author association OWNER, MEMBER or COLLABORATOR;
+- the PR classifies as T0 and `AUTONOMY_T0` is exactly `on`;
+- no approval from `motebit-reviewer` stands.
 
-It **fails** when `motebit-reviewer` has approved a PR that classifies as T1, and when `AUTONOMY_T0` is `off` and the only approval is the machine user's. A compromised or mistaken reviewer session therefore cannot merge a T1 change: the ruleset blocks the merge, not the agent. The check's workflow and the classifier are owned paths, so the boundary cannot be moved by a T0 change.
+It **fails** in two cases:
+
+- `motebit-reviewer` has approved a PR that classifies as T1 (`machine-approved-t1`);
+- the switch is anything but `on` and the only approval is the machine user's (`kill-switch-machine-only`).
+
+A machine approval binds on any commit for as long as GitHub reports it `APPROVED`. Dismissing it, by hand or through a push that dismisses stale reviews, rewrites its state, after which the approval counts neither for the check nor toward GitHub's required approval. A compromised or mistaken reviewer session therefore cannot merge a T1 change: the ruleset blocks the merge, not the agent. The check's workflow and the classifier are owned paths, so the boundary cannot be moved by a T0 change.
 
 **T1, founder only:** any PR touching an owned path (money, identity, authority gates, constitutional files). Agents build, review, verify and publish it; it waits for `hakimlabs`. Unchanged from today.
 
-**Why a machine user and not a GitHub App:** a required review counts only users with write access, and code-owner review counts only users or teams. An App's review cannot satisfy the ruleset. The machine user holds a fine-grained token scoped to `motebit/motebit` with pull-request write only, stored where `motebit-agent`'s is (`~/.config/gh-motebit-reviewer`), and is never exported into builder or reviewer agents.
+**Why a machine user and not a GitHub App:** a required review counts only users with write access, and code-owner review counts only users or teams. An App's review cannot satisfy the ruleset. The machine user's token is held by the founder alone and is never exported into builder or reviewer agents.
+
+- The live matrix used a classic token with scopes `public_repo` and `read:org`, stored in the founder's macOS Keychain.
+- That token was deleted for matrix row R1, and the reviewer holds no credential today.
+- Issuing a new token is a founder decision. Prefer a fine-grained token scoped to `motebit/motebit` if the organization's policy permits one.
 
 ## Rails
 
@@ -87,7 +101,32 @@ It **fails** when `motebit-reviewer` has approved a PR that classifies as T1, an
 - **Daily digest:** one comment on a pinned tracking issue listing every autonomous approval and merge, with its receipt. The founder reviews receipts, not keyboards.
 - **No self-expansion:** changes to `CODEOWNERS`, `money-identity-path.ts`, this document's rules, or the ruleset are owned paths. Autonomy cannot widen itself.
 
-**Status: autonomous merging is not authorized.** It becomes authorized only when `motebit-reviewer` exists with the scoped token, the `autonomy-tier` check is required in `main-protection`, and the adversarial fixtures and the live blocked-merge check have passed.
+**Status (2026-10-28): the enforcement is built and live-tested; standing autonomous merging is not authorized.** Evidence for every line below is in [`docs/ops/milestone-ledger.md`](../ops/milestone-ledger.md).
+
+Done:
+
+- `motebit-reviewer` exists with write access.
+- The classifier and the `autonomy-tier` check are on `main` (#1177, #1183, #1184), required in `main-protection` and pinned to the Actions app.
+- All 106 adversarial tampers turn a test red.
+- The contract-phase live matrix passed every row (M1–M7, R1–R3). One T0 change merged on a machine-only approval with the switch `on` (M3), and a founder-approved PR reverted it.
+
+Not built:
+
+- The rails below: rate limit, auto-revert, daily digest.
+- The steward's approval loop and its receipts.
+
+Standing T0 autonomy needs:
+
+- those rails;
+- a new reviewer token;
+- the founder setting `AUTONOMY_T0` to `on`.
+
+Until then the switch stays `off`, and every merge has the founder's approval.
+
+**Operating rules from the live matrix:**
+
+- **Restore means dismiss.** Re-adding the reviewer as a collaborator makes every one of its earlier approvals count again, including any submitted while it had no access. After any restore, dismiss its standing approvals before anything is queued.
+- **A submitted review is not authority.** On this public repository a user without access can still submit an `APPROVED` review. GitHub does not count it toward the required approval, so only GitHub's count and the check's verdict decide.
 
 ## No interim delegation
 
@@ -99,10 +138,17 @@ Until `motebit-reviewer` and the `autonomy-tier` check exist, every merge has th
 
 ## Founder actions to adopt
 
-1. Create the `motebit-reviewer` GitHub user, give it write access to `motebit/motebit`, and create its fine-grained token. Claude cannot create accounts.
-2. Approve the PR that adds `scripts/classify-autonomy-tier.ts`. When you add `autonomy-tier` as a required check in `main-protection`, **pin it to the GitHub Actions app** (integration id 15368). A required check pinned by name alone accepts a commit status of that name from any account with write access, the required `autonomy-tier` check (added to `main-protection`), the `AUTONOMY_T0` variable, and the digest issue. The classifier ships with adversarial fixtures that test both sides of the boundary:
+1. ~~Create the `motebit-reviewer` GitHub user and give it write access to `motebit/motebit`.~~ Done. Claude cannot create accounts.
+2. ~~Approve the classifier PR and add `autonomy-tier` as a required check in `main-protection`, **pinned to the GitHub Actions app** (integration id 15368). A required check pinned by name alone accepts a commit status of that name from any account with write access.~~ Done (#1177, ruleset 13909292). Also done: the `AUTONOMY_T0` variable (`off`).
+3. Still open:
+   - approve the rails and the steward loop when they are built;
+   - create the digest issue;
+   - issue a new reviewer token;
+   - decide when to set `AUTONOMY_T0` to `on`.
+
+The classifier ships with adversarial fixtures that test both sides of the boundary:
 
 - **Must be T1:** a weakened relay money-path test (assertion removed, `.skip` added), a workflow edit, a loosened dependency range, a drift-gate config change, a rename of an owned file to an unowned path, and an unparseable diff.
 - **Must stay T0:** a docs-only change and a presentation-only UI change.
 
-Acceptance needs every fixture green, and then a live check that a T1 PR approved only by `motebit-reviewer` is blocked by the ruleset on GitHub, not just reported red.
+Acceptance needs every fixture green, and then a live check that a T1 PR approved only by `motebit-reviewer` is blocked by the ruleset on GitHub, not just reported red. Both are met: 106/106 tampers, and matrix rows M1, M4 and M5 (T1 machine-only approvals blocked on GitHub, including in the merge queue).
