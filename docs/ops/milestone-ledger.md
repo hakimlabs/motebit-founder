@@ -30,7 +30,7 @@ Order: A → B → C → D → E. F has the same priority as B and starts when B
 
 | Id  | Milestone                                                                                                                                                                                 | Owner                                         | Depends on | Status                             |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ---------- | ---------------------------------- |
-| A   | Repository autonomy, enforced outside the agent                                                                                                                                           | agent lead (engineering); founder (authority) | none       | in progress                        |
+| A   | Repository autonomy, enforced outside the agent                                                                                                                                           | agent lead (engineering); founder (authority) | none       | closed 2026-10-28                  |
 | B   | First complete motebit-governed DevSecOps execution: identity, scoped delegation, exact revision, policy decision, external enforcement, signed receipts, provider independence           | agent lead; founder                           | A          | not started                        |
 | C   | Denial, revocation (including cascade revocation and continuous authorization), tampering, restart and offline verification; what survives a compromised agent                            | agent lead                                    | B          | not started                        |
 | D   | Minimum standards interoperability profile (OAuth/OIDC; evaluate SPIFFE) as adapters; motebit keeps its own identity root                                                                 | agent lead                                    | B          | not started                        |
@@ -53,7 +53,7 @@ Order: A → B → C → D → E. F has the same priority as B and starts when B
 - Verdict rules:
   - A founder approval counts only on the PR's current head.
   - A machine approval binds on any commit for as long as GitHub reports its state as `APPROVED`, which only ever narrows what passes.
-  - A dismissal ends it. GitHub rewrites a dismissed review's state to `DISMISSED`, whether a person dismissed it or a push did (`dismiss_stale_reviews_on_push`). So the verdict no longer sees that approval (matrix M6). The script's comments still say the approval binds "for good"; correcting them is the next task.
+  - A dismissal ends it. GitHub rewrites a dismissed review's state to `DISMISSED`, whether a person dismissed it or a push did (`dismiss_stale_reviews_on_push`). So the verdict no longer sees that approval (matrix M6). #1193 corrected the script's comments, which had said the approval binds "for good".
   - Separately, a dismissed approval no longer counts toward GitHub's own required approval.
 
 **Evidence.**
@@ -127,7 +127,7 @@ Setup:
 
 **Findings.**
 
-1. **A dismissal ends a machine approval (M6).** The verdict script's claim that a machine approval binds "for good" is false: once GitHub rewrites a dismissed review's state, the verdict no longer counts that approval. This is not an authorization hole. A merge still needs an approval GitHub counts, and any such approval is visible to the verdict as `APPROVED`. The claim and the script comments are corrected in a reviewed PR.
+1. **A dismissal ends a machine approval (M6).** The verdict script's claim that a machine approval binds "for good" is false: once GitHub rewrites a dismissed review's state, the verdict no longer counts that approval. This is not an authorization hole. A merge still needs an approval GitHub counts, and any such approval is visible to the verdict as `APPROVED`. #1193 corrected the claim in the script comments.
 2. **Removing access does not stop a review being submitted (M7, observed live, no run id).** On a public repository, a reviewer without access can still submit an `APPROVED` review, with author association `NONE`. GitHub did not count it toward the required approval. So "an approval was submitted" is not evidence of authority.
 3. **Restoring access brings old approvals back (M7).** Re-adding a collaborator makes all of their earlier approvals count again, including any submitted while they had no access. **Operating rule:** after restoring a reviewer, dismiss its standing approvals before anything is queued.
 4. **Re-run timestamps.** `gh run rerun` keeps the run's original `createdAt`: run 40633462122 attempt 2 keeps 04:38:31Z but judged a review from 05:13:01Z. Cite a re-run run by run id **and attempt**. Separately, the M3 and R3 queue runs (both attempt 1) were missed by the operator's recorder and were read from the run logs directly.
@@ -138,17 +138,22 @@ Setup:
 - The e2e Playwright install sometimes takes nearly 10 minutes.
 - Runs of the same event on the same PR share a concurrency group, so a push followed by an edit cancels the earlier run. A cancelled run counts as a failure until it is re-run.
 
-**GO/NO-GO.** The matrix passed every row it ran. Every one of those denied what it should deny, and the one intended merge (M3) went through. The M7 T0 variant was not run (above). Standing T0 autonomy is still NO-GO:
+**GO/NO-GO.** The matrix passed every row it ran. Every one of those denied what it should deny, and the one intended merge (M3) went through. The M7 T0 variant was not run (above). **A is closed.** Standing T0 autonomy is still NO-GO:
 
-- `AUTONOMY_T0` stays `off` until #1163 merges and the founder decides.
+- `AUTONOMY_T0` stays `off` until the founder decides. Turning it on needs its own reviewed design first.
 - The reviewer has no credential.
 - Any future restore of reviewer access follows finding 3.
 
-**Next.**
+**Closure (2026-10-28).**
 
-1. The founder closes the throwaways #1188, #1190 and #1191.
-2. A reviewed PR corrects the "binds for good" comments in `scripts/autonomy-tier-verdict.ts` (finding 1).
-3. Revise and merge #1163 (the design proposal), which closes A.
+| Step                                          | Evidence                                                                                                                                                                        |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Throwaways closed                             | #1188, #1190 and #1191 closed from the founder's account                                                                                                                        |
+| Matrix results recorded                       | #1185, merged 2026-10-28T12:52:39Z as `ead33ecb4`                                                                                                                               |
+| Design proposal revised and merged (closes A) | #1163, head `6ec41dfb4`. Run 40763458086 (`merge_group`, policy `ead33ecb4` = expected), switch read `off`: PASS `founder-approved`. Merged 2026-10-28T20:58:11Z as `e87253753` |
+| Verdict comments corrected (finding 1)        | #1193, head `f0821a99a`. Run 40765822704 (`merge_group`, policy `ef7891111` = expected): PASS `founder-approved`. Merged 2026-10-28T21:01:03Z as `c1ece413c`                    |
+
+**Next.** Milestone B.
 
 ## B–F
 
