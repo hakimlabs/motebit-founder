@@ -43,11 +43,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
 const HOOK_SRC = readFileSync(join(ROOT, ".husky/pre-push"), "utf8");
 // The hook re-runs itself under the machine-wide verification lock, so every
-// fixture repo carries the real lock and its wrapper (#1147).
+// fixture repo carries the real lock and its wrapper (#1147), and the real
+// scripts/ reader derivation the hook runs for a scripts/ change (2026-10-28).
+const READERS_HELPER = "scripts/lib/prepush-script-readers.ts";
 const LOCK_FILES = [
   "scripts/with-verify-lock.ts",
   "scripts/lib/verify-lock.ts",
   "scripts/lib/differential-tree.ts",
+  READERS_HELPER,
 ].map((rel) => [rel, readFileSync(join(ROOT, rel), "utf8")] as const);
 
 /**
@@ -76,6 +79,15 @@ exit 0
 
 let base: string;
 let shimDir: string;
+/**
+ * The hook's own TMPDIR: short, because tsx's CLI listens on a unix socket
+ * `$TMPDIR/tsx-<uid>/<pid>.pipe` and the hook runs tsx nested (the verify
+ * lock, then the scripts/ readers helper). Under a long TMPDIR (the tamper
+ * runner's slot dirs) the socket path passes the 104-byte macOS limit, is
+ * truncated, and the two live tsx processes collide (EADDRINUSE) — the
+ * helper then fails closed and every scripts/ narrowing case reads as ALL.
+ */
+let hookTmp: string;
 
 function git(cwd: string, ...args: string[]): string {
   const r = spawnSync("git", args, {
@@ -130,6 +142,17 @@ function repoWith(change: Record<string, string>, opts: RepoOpts = {}): string {
   write(dir, "packages/other/src/index.ts", "export const other = 1;\n");
   write(dir, "docs/guide.md", "# Guide\n");
   write(dir, "scripts/check-x.ts", "export {};\n");
+  // The scripts/ readers fixture: packages/leaf's tamper file imports the
+  // runner, which imports a core module; one script is a globalDependency.
+  write(dir, "turbo.json", JSON.stringify({ globalDependencies: ["scripts/global-dep.ts"] }));
+  write(dir, "scripts/global-dep.ts", "export {};\n");
+  write(dir, "scripts/lib/tamper-runner.ts", 'export { core } from "./tamper-core.ts";\n');
+  write(dir, "scripts/lib/tamper-core.ts", "export const core = 1;\n");
+  write(
+    dir,
+    "packages/leaf/tamper/t.mjs",
+    'import { core } from "../../../scripts/lib/tamper-runner.ts";\ncore;\n',
+  );
   write(dir, "coverage-graduation.json", "{}\n");
   // A workspace-root dir with no package.json (the real packages/github-action/
   // is an action.yml + README), and a package a change can delete outright.
@@ -192,6 +215,7 @@ function runHook(repo: string, env: Record<string, string> = {}): Run {
       SHIM_LOG: log,
       // Each run's own lock file: the fixture runs never wait on a real push.
       MOTEBIT_VERIFY_LOCK_FILE: join(repo, "..", `${repo.split("/").pop()}-verify.lock`),
+      TMPDIR: hookTmp,
       ...env,
     },
   });
@@ -210,10 +234,12 @@ beforeAll(() => {
   mkdirSync(shimDir);
   writeFileSync(join(shimDir, "pnpm"), SHIM);
   chmodSync(join(shimDir, "pnpm"), 0o755);
+  hookTmp = mkdtempSync("/tmp/pph-");
 });
 
 afterAll(() => {
   rmSync(base, { recursive: true, force: true });
+  rmSync(hookTmp, { recursive: true, force: true });
 });
 
 describe("pre-push hook — pushed from a LINKED worktree (#835, 2026-10-02)", () => {
@@ -683,6 +709,98 @@ const SCENARIOS: Record<string, (hook: string) => Scenario> = {
       detail: show(r),
     };
   },
+  /**
+   * scripts/ readers (2026-10-28): a scripts/ path no package reads adds no
+   * package's tests (it used to run all of them); the gate phases still run.
+   */
+  "unreferenced script runs no package tests": (hook) => {
+    const r = runHook(repoWith({ "scripts/check-x.ts": "export const x = 1;\n" }, { hook }));
+    return {
+      ok:
+        r.status === 0 &&
+        testCalls(r).length === 0 &&
+        /test — SKIPPED/.test(r.stderr) &&
+        r.calls.includes("test:gates") &&
+        r.calls.includes("check-gates-effective"),
+      detail: show(r),
+    };
+  },
+  /** A script a package's tamper file imports tests exactly that package. */
+  "tamper-runner change tests exactly its reader": (hook) => {
+    const r = runHook(
+      repoWith(
+        { "scripts/lib/tamper-runner.ts": 'export { core } from "./tamper-core.ts";\n// x\n' },
+        { hook },
+      ),
+    );
+    return {
+      ok: r.status === 0 && JSON.stringify(testCalls(r)) === JSON.stringify([TEST_CHANGED]),
+      detail: show(r),
+    };
+  },
+  /** A script the reader's script imports counts as a change to it. */
+  "transitive scripts/lib change tests the reader": (hook) => {
+    const r = runHook(
+      repoWith({ "scripts/lib/tamper-core.ts": "export const core = 2;\n" }, { hook }),
+    );
+    return {
+      ok: r.status === 0 && JSON.stringify(testCalls(r)) === JSON.stringify([TEST_CHANGED]),
+      detail: show(r),
+    };
+  },
+  /** A turbo globalDependency script moves every package → every test. */
+  "globalDependency script runs every test": (hook) => {
+    const r = runHook(repoWith({ "scripts/global-dep.ts": "export const g = 1;\n" }, { hook }));
+    return { ok: r.status === 0 && allTests(r) && /fail closed/.test(r.stderr), detail: show(r) };
+  },
+  /** The helper cannot run (here: deleted) → every test. */
+  "helper failure runs every test": (hook) => {
+    const r = runHook(
+      repoWith(
+        { "scripts/check-x.ts": "export const x = 1;\n" },
+        { hook, remove: [READERS_HELPER] },
+      ),
+    );
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
+  },
+  /** Output that does not end in __END__ (a crash midway) → every test. */
+  "helper output without __END__ runs every test": (hook) => {
+    const r = runHook(
+      repoWith({ [READERS_HELPER]: 'process.stdout.write("packages/leaf\\n");\n' }, { hook }),
+    );
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
+  },
+  /** A printed line that is not a workspace package dir → every test. */
+  "helper output naming a non-package runs every test": (hook) => {
+    const r = runHook(
+      repoWith(
+        { [READERS_HELPER]: 'process.stdout.write("packages/nope\\n__END__\\n");\n' },
+        { hook },
+      ),
+    );
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
+  },
+  /** A scripts/ reader and a changed package: the test filter is their union. */
+  "scripts + package change tests the union": (hook) => {
+    const r = runHook(
+      repoWith(
+        {
+          "scripts/lib/tamper-core.ts": "export const core = 2;\n",
+          "packages/other/src/index.ts": "export const other = 2;\n",
+        },
+        { hook },
+      ),
+    );
+    return {
+      ok:
+        r.status === 0 &&
+        JSON.stringify(testCalls(r)) ===
+          JSON.stringify([
+            "turbo run test --filter=./packages/leaf --filter=./packages/other --concurrency=2",
+          ]),
+      detail: show(r),
+    };
+  },
   /** A failing phase aborts the push with a non-zero code. */
   "a failing gate blocks": (hook) => {
     const r = runHook(repoWith(LEAF_CHANGE, { hook }), { SHIM_FAIL: "^check$" });
@@ -822,6 +940,42 @@ const HOOK_MUTANTS: { name: string; from: string | RegExp; to: string; killedBy:
     from: "|\\.gitignore",
     to: "",
     killedBy: "nested .gitignore triggers whole-repo format",
+  },
+  {
+    name: "scripts/ readers: the narrowing call dropped (every scripts/ change tests all again)",
+    from: /\n\s*scope_script_readers\n/,
+    to: "\n",
+    killedBy: "unreferenced script runs no package tests",
+  },
+  {
+    name: "scripts/ readers: a helper that exits non-zero is read as 'no readers'",
+    from: "|| _sr='__ALL__ the helper exited non-zero'",
+    to: "|| _sr=__END__",
+    killedBy: "helper failure runs every test",
+  },
+  {
+    name: "scripts/ readers: output without __END__ accepted",
+    from: /_sr="__ALL__ no __END__ line: [^\n]*"/,
+    to: "_sr=$(printf '%s\\n' \"$_sr\")",
+    killedBy: "helper output without __END__ runs every test",
+  },
+  {
+    name: "scripts/ readers: a printed line that is not a package dir accepted",
+    from: "printf '__ALL__ %s\\n' \"$_d\"",
+    to: "printf '%s\\n' \"$_d\"",
+    killedBy: "helper output naming a non-package runs every test",
+  },
+  {
+    name: "scripts/ readers: the helper's __ALL__ verdict ignored",
+    from: "if printf '%s\\n' \"$_sr\" | grep -q '^__ALL__'; then",
+    to: "if false; then",
+    killedBy: "globalDependency script runs every test",
+  },
+  {
+    name: "scripts/ readers: readers replace the changed packages instead of joining them",
+    from: '"$_changed_pkg_dirs" "$_sr"',
+    to: '"" "$_sr"',
+    killedBy: "scripts + package change tests the union",
   },
   {
     name: "final review (1): paths handed to prettier without `--` (a `-x.md` is an option)",

@@ -302,14 +302,27 @@ export const ASSIGNMENTS: Record<string, string[]> = {
  * sha256 of each function's canonical token text (comments and layout
  * removed). A changed body is a deliberate re-review: run_phase's `exit` is
  * what makes a failing phase abort the push, changed_files decides scope,
- * format_changed runs prettier.
+ * format_changed runs prettier, scope_script_readers (2026-10-28) moves
+ * changed scripts/ paths out of `_unscoped_paths` and adds the packages that
+ * read them (scripts/lib/prepush-script-readers.ts) to `_changed_pkg_dirs` —
+ * the two pinned assignments it overrides are reviewed with its hash. It only
+ * narrows WHICH tests the hook's `turbo run test` runs; CI runs every suite.
  */
 export const PINNED_FUNCTIONS: Record<string, string> = {
   run_phase: "91e637577b02ae44",
   skip_phase: "f3194ff4fb1a93f9",
   changed_files: "2d6237cb53d2691a",
   format_changed: "620fef7d17b67873",
+  scope_script_readers: "4506065556219026",
 };
+
+/**
+ * Pinned functions the hook calls as a plain command (not as a run_phase
+ * form): changed_files (in `$( )`, literal paths only) and
+ * scope_script_readers (no arguments; it sets hook variables, so a forked
+ * call only loses its narrowing — the scripts/ paths stay unscoped).
+ */
+const DIRECT_CALL_FUNCTIONS = new Set(["changed_files", "scope_script_readers"]);
 
 export const canonHash = (canon: string) =>
   createHash("sha256").update(ws(canon)).digest("hex").slice(0, 16);
@@ -1483,7 +1496,7 @@ export function evaluateHook(hook: string): {
         return;
       }
       if (PURE.has(head)) return;
-      if (head in PINNED_FUNCTIONS && head !== "changed_files") {
+      if (head in PINNED_FUNCTIONS && !DIRECT_CALL_FUNCTIONS.has(head)) {
         violations.push(
           `${at(cmd.line)} calls \`${head}\` directly — a pinned phase function runs only as a run_phase form`,
         );
@@ -1492,6 +1505,12 @@ export function evaluateHook(hook: string): {
       if (head === "changed_files") {
         if (cmd.words.slice(1).some((w) => /[$`]/.test(w.raw))) {
           violations.push(`${at(cmd.line)} \`${text}\` — changed_files takes literal paths only`);
+        }
+        return;
+      }
+      if (head === "scope_script_readers") {
+        if (cmd.words.length !== 1) {
+          violations.push(`${at(cmd.line)} \`${text}\` — scope_script_readers takes no arguments`);
         }
         return;
       }

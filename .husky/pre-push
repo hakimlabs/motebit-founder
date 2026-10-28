@@ -146,6 +146,49 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # line — a glob the sed below cannot map (`examples/*/*`, `!**/test/**`),
   # another key, a flow list — means the package set is not what this hook
   # thinks it is, so `_ws_unmapped` is non-empty and tests run unfiltered.
+  #
+  # scripts/ paths (2026-10-28): the deny-by-default rule below sent every
+  # gate edit to all 74 packages' tests (592s of an 18-minute push), yet
+  # almost no scripts/ file is read by a package. scope_script_readers asks
+  # scripts/lib/prepush-script-readers.ts — which DERIVES, from the tree, the
+  # packages that read the changed scripts/ paths (package files' references,
+  # through scripts/'s own import closure) — and moves those paths out of
+  # `_unscoped_paths`, adding the readers to `_changed_pkg_dirs`. Fail
+  # closed: a non-zero exit (tsx missing, a crash), output not ending in
+  # `__END__`, an `__ALL__` line (turbo globalDependency, a root config that
+  # reads the path, an unfollowable closure, a root script run from a
+  # package, any error) or any line that is not a workspace package dir
+  # leaves the paths unscoped, so every package's tests run. The gate
+  # self-tests + gate-effectiveness phases still run for every scripts/
+  # change. Pinned by pre-push-hook.test.ts ("scripts/ readers") and
+  # scripts/__tests__/prepush-script-readers.test.ts.
+  scope_script_readers() {
+    _ss=$(printf '%s\n' "$_unscoped_paths" | grep '^scripts/' || true)
+    if [ -z "$_ss" ]; then return 0; fi
+    _sr=$(printf '%s\n' "$_ss" | tsx scripts/lib/prepush-script-readers.ts 2>/dev/null) || _sr='__ALL__ the helper exited non-zero'
+    if [ "$(printf '%s\n' "$_sr" | tail -n 1)" = __END__ ]; then
+      _sr=$(printf '%s\n' "$_sr" | sed '$d' | while IFS= read -r _d; do
+        if printf '%s\n' "$_d" | grep -qE "^($_ws_roots)/[^/]+\$" && [ -f "$_d/package.json" ]; then
+          printf '%s\n' "$_d"
+        else
+          printf '__ALL__ %s\n' "$_d"
+        fi
+      done)
+    else
+      _sr="__ALL__ no __END__ line: $(printf '%s\n' "$_sr" | head -n 1)"
+    fi
+    if printf '%s\n' "$_sr" | grep -q '^__ALL__'; then
+      printf '\n⚠ pre-push: cannot scope the scripts/ change (%s) — every package tests (fail closed)\n' \
+        "$(printf '%s\n' "$_sr" | grep '^__ALL__' | head -n 1)" >&2
+      return 0
+    fi
+    _unscoped_paths=$(printf '%s\n' "$_unscoped_paths" | grep -v '^scripts/' || true)
+    _changed_pkg_dirs=$(printf '%s\n%s\n' "$_changed_pkg_dirs" "$_sr" | sed '/^$/d' | sort -u)
+    if [ -z "$MOTEBIT_PREPUSH_QUIET" ]; then
+      printf '\nℹ pre-push: the scripts/ change is read by: %s\n' \
+        "$(printf '%s\n' "$_sr" | sed '/^$/d' | tr '\n' ' ')" >&2
+    fi
+  }
   _pkg_scope_ok=
   _changed_pkg_dirs=
   _unscoped_paths=
@@ -172,6 +215,8 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
         _pd=$(printf '%s\n' "$_p" | sed -E -n "s#^(($_ws_roots)/[^/]+)/.*#\\1#p")
         if [ -n "$_p" ] && { [ -z "$_pd" ] || [ ! -f "$_pd/package.json" ]; }; then printf '%s\n' "$_p"; fi
       done)
+    # scripts/ paths: narrowed to their readers (scope_script_readers, above).
+    scope_script_readers
   fi
 
   # Full build is required before the drift gates: check-api-surface shells
