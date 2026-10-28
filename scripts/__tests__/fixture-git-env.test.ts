@@ -327,13 +327,18 @@ describe("check-fixture-git-env classification", () => {
   });
 
   it("the two scrubbed fixture helpers the old parse miscounted as repo-root read as scrubbed fixtures", () => {
-    for (const [rel, line] of [
-      ["scripts/__tests__/pre-push-hook.test.ts", 81],
-      ["scripts/__tests__/check-turbo-global-deps.test.ts", 36],
+    // Each site is located by its own text (the helper's `git(…)` spawn), not
+    // a hard-coded line number an unrelated edit above it would shift. The
+    // anchor must occur exactly once, so it names exactly one site.
+    for (const [rel, anchor] of [
+      ["scripts/__tests__/pre-push-hook.test.ts", '  const r = spawnSync("git", args, {'],
+      ["scripts/__tests__/check-turbo-global-deps.test.ts", '  return execFileSync("git", args, {'],
     ] as const) {
-      const site = analyzeTs(readFileSync(join(ROOT, rel), "utf8"), join(ROOT, rel)).find(
-        (s) => s.line === line,
-      );
+      const text = readFileSync(join(ROOT, rel), "utf8");
+      const lines = text.split("\n");
+      const at = lines.flatMap((l, i) => (l === anchor ? [i + 1] : []));
+      expect([rel, at.length], `anchor \`${anchor}\` must occur exactly once`).toEqual([rel, 1]);
+      const site = analyzeTs(text, join(ROOT, rel)).find((s) => s.line === at[0]);
       expect([rel, site?.target, site?.scrubbed]).toEqual([rel, "fixture", true]);
     }
   });
