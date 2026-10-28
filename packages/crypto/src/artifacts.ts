@@ -816,6 +816,7 @@ export async function signDelegation(
   delegation: Omit<DelegationToken, "signature" | "suite">,
   delegatorPrivateKey: Uint8Array,
 ): Promise<DelegationToken> {
+  assertCanonicalPartyKeys("signDelegation", delegation);
   const body = { ...delegation, suite: DELEGATION_TOKEN_SUITE };
   const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
@@ -846,6 +847,23 @@ const CANONICAL_PUBLIC_KEY_HEX = /^[0-9a-f]{64}$/;
 
 function isCanonicalPublicKeyHex(key: unknown): key is string {
   return typeof key === "string" && CANONICAL_PUBLIC_KEY_HEX.test(key);
+}
+
+/**
+ * Producer side of the same rule (spec/standing-delegation-v1 §5: a producer
+ * MUST NOT emit a non-canonical key). A grant or token signed over another
+ * spelling verifies nowhere, so minting one would fail silently downstream —
+ * refuse loudly at the mint instead.
+ */
+function assertCanonicalPartyKeys(
+  signer: string,
+  artifact: { delegator_public_key: string; delegate_public_key: string },
+): void {
+  for (const field of ["delegator_public_key", "delegate_public_key"] as const) {
+    if (!isCanonicalPublicKeyHex(artifact[field])) {
+      throw new Error(`${signer}: ${field} must be canonical (64 lowercase hex)`);
+    }
+  }
 }
 
 /**
@@ -964,6 +982,7 @@ export async function signStandingDelegation(
   grant: Omit<StandingDelegation, "signature" | "suite">,
   delegatorPrivateKey: Uint8Array,
 ): Promise<StandingDelegation> {
+  assertCanonicalPartyKeys("signStandingDelegation", grant);
   const body = { ...grant, suite: DELEGATION_TOKEN_SUITE };
   const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);

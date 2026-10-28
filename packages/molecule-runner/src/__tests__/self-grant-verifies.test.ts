@@ -73,6 +73,20 @@ describe("self-grant verifies end-to-end through verifyGrantForTurn", () => {
     expect(grant.scope).toBe("delegate_to_agent");
   });
 
+  it("a stored identity key spelled in UPPERCASE still self-issues a grant that VERIFIES (canonicalized at the mint)", async () => {
+    // bootstrapIdentity returns `device_public_key` from motebit.json verbatim;
+    // a legacy or hand-edited file may spell it in uppercase. The verifiers
+    // reject a non-canonical key, so without canonicalizing here the money
+    // seam would go silently dead (every spend `requires_verified_grant`).
+    const base = await realIdentity();
+    const identity = { ...base, publicKeyHex: base.publicKeyHex.toUpperCase() };
+    const grant = await selfIssueGrant(identity, MONEY);
+    expect(grant.delegator_public_key).toBe(base.publicKeyHex);
+    expect(grant.delegate_public_key).toBe(base.publicKeyHex);
+    const token = await mintTick(grant, identity);
+    expect(await verifyGrantForTurn(token, grant, [])).not.toBeNull();
+  });
+
   it("honors an explicit grantTtlMs (the grant expires when configured)", async () => {
     const identity = await realIdentity();
     const grant = await selfIssueGrant(identity, { ...MONEY, grantTtlMs: 5 * 60_000 });

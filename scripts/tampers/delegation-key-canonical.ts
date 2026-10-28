@@ -16,6 +16,13 @@
  *      verified grant for a revoked grant). Reads crypto's dist — rebuilt.
  *   7. Revocation check removed, through the relay's binder: the relay binds an
  *      UPPERCASE-key revocation. Reads crypto's dist — rebuilt.
+ *   8. `signStandingDelegation` refusal removed: a producer emits a grant every
+ *      verifier rejects.
+ *   9. `signDelegation` refusal removed: likewise for a per-tick token.
+ *  10. molecule-runner `selfIssueGrant` canonicalization removed: a stored
+ *      UPPERCASE identity key mints a grant the signer refuses (money seam dead).
+ *  11. CLI `grant revoke` guard removed: a stored non-canonical grant dies on
+ *      the signer's raw throw instead of the calm "already inert" line.
  *
  * Entries are `command` entries (the key-binding-malformed-succession.ts
  * shape): on this tree the runner's vitest mode reads no JSON report, because
@@ -147,6 +154,66 @@ const TAMPERS: TamperEntry[] = [
       "a delegation revocation binds to a key the relay holds for its delegator (#850 item 2) a revocation whose OWN key is spelled UPPER-case is not a statement this relay binds or caches",
     ),
     rebuild: ["@motebit/crypto"],
+  },
+  {
+    name: "crypto: signStandingDelegation refusal removed",
+    edits: [
+      {
+        file: ARTIFACTS,
+        from: '  assertCanonicalPartyKeys("signStandingDelegation", grant);\n',
+        to: "",
+      },
+    ],
+    ...vitestCommand(
+      "@motebit/crypto",
+      CRYPTO_TEST,
+      `${D} signStandingDelegation refuses a non-canonical delegator or delegate key`,
+    ),
+  },
+  {
+    name: "crypto: signDelegation refusal removed",
+    edits: [
+      {
+        file: ARTIFACTS,
+        from: '  assertCanonicalPartyKeys("signDelegation", delegation);\n',
+        to: "",
+      },
+    ],
+    ...vitestCommand(
+      "@motebit/crypto",
+      CRYPTO_TEST,
+      `${D} signDelegation refuses a non-canonical delegator or delegate key`,
+    ),
+  },
+  {
+    name: "molecule-runner: selfIssueGrant key canonicalization removed",
+    edits: [
+      {
+        file: "packages/molecule-runner/src/index.ts",
+        from: "  const keyHex = identity.publicKeyHex.toLowerCase();\n",
+        to: "  const keyHex = identity.publicKeyHex;\n",
+      },
+    ],
+    ...vitestCommand(
+      "@motebit/molecule-runner",
+      "src/__tests__/self-grant-verifies.test.ts",
+      "self-grant verifies end-to-end through verifyGrantForTurn a stored identity key spelled in UPPERCASE still self-issues a grant that VERIFIES (canonicalized at the mint)",
+    ),
+  },
+  {
+    name: "cli: grant revoke non-canonical guard removed",
+    edits: [
+      {
+        file: "apps/cli/src/subcommands/grant.ts",
+        from: "  if (!/^[0-9a-f]{64}$/.test(stored.grant.delegator_public_key)) {\n",
+        to: "  if ((false as boolean) && !/^[0-9a-f]{64}$/.test(stored.grant.delegator_public_key)) {\n",
+      },
+    ],
+    ...vitestCommand(
+      "motebit",
+      "src/__tests__/grant-revoke-noncanonical.test.ts",
+      "grant revoke — a stored grant with a non-canonical delegator key prints one calm line that the grant is already inert and exits non-zero, leaving the store untouched",
+    ),
   },
 ];
 

@@ -31,7 +31,7 @@ import {
   verifyDelegationTokenVerdict,
   isFullyVerified,
 } from "../index.js";
-import type { DelegationRevocation, StandingDelegation } from "@motebit/protocol";
+import type { DelegationRevocation, DelegationToken, StandingDelegation } from "@motebit/protocol";
 
 const SUITE = "motebit-jcs-ed25519-b64-v1" as const;
 const NOW = 1_700_000_000_000;
@@ -40,13 +40,31 @@ const DAY = 86_400_000;
 
 type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
 
+/**
+ * Sign any delegation-family body BY HAND, whatever its key spelling — what a
+ * foreign producer could emit. The motebit signers refuse a non-canonical key,
+ * so a test of the VERIFIER cannot go through them.
+ */
+async function handSign<T extends object>(
+  body: T,
+  privateKey: Uint8Array,
+): Promise<T & { suite: typeof SUITE; signature: string }> {
+  const withSuite = { ...body, suite: SUITE };
+  const sig = await signBySuite(
+    SUITE,
+    new TextEncoder().encode(canonicalJson(withSuite)),
+    privateKey,
+  );
+  return { ...withSuite, signature: toBase64Url(sig) };
+}
+
 async function makeGrant(
   delegator: Kp,
   delegate: Kp,
   keys: { delegator?: string; delegate?: string } = {},
 ): Promise<StandingDelegation> {
   const delegatorHex = bytesToHex(delegator.publicKey);
-  return signStandingDelegation(
+  return handSign(
     {
       grant_id: "grant-1",
       delegator_id: await deriveSovereignMotebitId(delegatorHex),
@@ -162,6 +180,57 @@ describe("delegation family — keys verify only in their canonical spelling", (
     }
   });
 
+  it("signStandingDelegation refuses a non-canonical delegator or delegate key", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const a = bytesToHex(alice.publicKey);
+    const b = bytesToHex(bob.publicKey);
+    const body = (delegator_public_key: string, delegate_public_key: string) => ({
+      grant_id: "grant-1",
+      delegator_id: "mote-alice",
+      delegator_public_key,
+      delegate_id: "mote-bob",
+      delegate_public_key,
+      scope: "web.search",
+      subject: "s",
+      cadence_ms: DAY,
+      issued_at: NOW,
+      not_before: null,
+      expires_at: NOW + DAY,
+      max_token_ttl_ms: HOUR,
+    });
+    await expect(signStandingDelegation(body(a, b), alice.privateKey)).resolves.toBeDefined();
+    await expect(
+      signStandingDelegation(body(a.toUpperCase(), b), alice.privateKey),
+    ).rejects.toThrow(/delegator_public_key must be canonical/);
+    await expect(
+      signStandingDelegation(body(a, b.toUpperCase()), alice.privateKey),
+    ).rejects.toThrow(/delegate_public_key must be canonical/);
+  });
+
+  it("signDelegation refuses a non-canonical delegator or delegate key", async () => {
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const a = bytesToHex(alice.publicKey);
+    const b = bytesToHex(bob.publicKey);
+    const body = (delegator_public_key: string, delegate_public_key: string) => ({
+      delegator_id: "mote-alice",
+      delegator_public_key,
+      delegate_id: "mote-bob",
+      delegate_public_key,
+      scope: "web.search",
+      issued_at: NOW,
+      expires_at: NOW + HOUR,
+    });
+    await expect(signDelegation(body(a, b), alice.privateKey)).resolves.toBeDefined();
+    await expect(signDelegation(body(a.toUpperCase(), b), alice.privateKey)).rejects.toThrow(
+      /delegator_public_key must be canonical/,
+    );
+    await expect(signDelegation(body(a, `${b.slice(0, 63)}g`), alice.privateKey)).rejects.toThrow(
+      /delegate_public_key must be canonical/,
+    );
+  });
+
   it("a grant whose delegator key is spelled in UPPERCASE does not verify (the delegator's canonical revocation could never bind it)", async () => {
     const alice = await generateKeypair();
     const bob = await generateKeypair();
@@ -192,7 +261,7 @@ describe("delegation family — keys verify only in their canonical spelling", (
     const a = bytesToHex(alice.publicKey);
     const b = bytesToHex(bob.publicKey);
     const tick = (delegator_public_key: string, delegate_public_key: string) =>
-      signDelegation(
+      handSign<Omit<DelegationToken, "signature" | "suite">>(
         {
           delegator_id: "mote-alice",
           delegator_public_key,
@@ -214,7 +283,7 @@ describe("delegation family — keys verify only in their canonical spelling", (
     const bob = await generateKeypair();
     const upper = bytesToHex(alice.publicKey).toUpperCase();
     const grant = await makeGrant(alice, bob, { delegator: upper });
-    const token = await signDelegation(
+    const token = await handSign<Omit<DelegationToken, "signature" | "suite">>(
       {
         delegator_id: grant.delegator_id,
         delegator_public_key: grant.delegator_public_key,

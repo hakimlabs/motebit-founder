@@ -544,6 +544,16 @@ export async function handleGrantRevoke(grantId: string | undefined): Promise<vo
     console.log(`Already revoked (terminal — spec §6 D3). Nothing to do.`);
     return;
   }
+  // A grant whose delegator key is not in its one canonical spelling (64
+  // lowercase hex, standing-delegation-v1 §5) verifies nowhere, so it confers
+  // nothing — and a revocation of it cannot be signed (the signer refuses the
+  // spelling). Say so calmly, before asking for the passphrase.
+  if (!/^[0-9a-f]{64}$/.test(stored.grant.delegator_public_key)) {
+    console.error(
+      `Grant ${grantId} carries a non-canonical delegator key — it verifies nowhere and is already inert. Nothing to revoke.`,
+    );
+    process.exit(1);
+  }
 
   const fullConfig = loadFullConfig();
   const active = await loadActiveSigningKey(fullConfig, { promptLabel: "Passphrase: " });
