@@ -15,6 +15,7 @@ import {
   coveragePackages,
   readPackageScripts,
   runShard,
+  shardEnv,
   turboArgs,
   verifyManifests,
   verifyPartition,
@@ -127,11 +128,13 @@ describe("the verdict job's manifest proof", () => {
 describe("runShard — what a shard launches and the exit it returns", () => {
   const recording = (status: number | null) => {
     const calls: string[][] = [];
-    const spawn: TurboSpawn = (args) => {
+    const envs: Record<string, string>[] = [];
+    const spawn: TurboSpawn = (args, env) => {
       calls.push(args);
+      envs.push(env);
       return { status };
     };
-    return { calls, spawn };
+    return { calls, envs, spawn };
   };
   const a = assignShards(PKGS, N);
 
@@ -158,6 +161,16 @@ describe("runShard — what a shard launches and the exit it returns", () => {
 
   it("a signal-killed child (status null) is a failure, never 0", () => {
     expect(runShard(a.shards[1]!, recording(null).spawn)).toBe(1);
+  });
+
+  it("only the solo relay shard widens relay's worker pool; every other shard adds no env", () => {
+    a.shards.forEach((dirs, i) => {
+      const { envs, spawn } = recording(0);
+      runShard(dirs, spawn);
+      expect(envs).toEqual([i === 0 ? { MOTEBIT_RELAY_MAX_WORKERS: "4" } : {}]);
+    });
+    expect(shardEnv(["services/relay", "apps/cli"])).toEqual({});
+    expect(shardEnv(["apps/cli"])).toEqual({});
   });
 
   it("a spawn error throws rather than passing", () => {
