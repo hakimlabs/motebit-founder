@@ -24,9 +24,9 @@ describe("ANTHROPIC_PICKER (#654)", () => {
     expect(pickerModelForTier("default")).toBe(DEFAULT_ANTHROPIC_MODEL);
   });
 
-  it("offers Opus 5.5 as the strongest tier and Haiku 4.5 as the fast tier", () => {
+  it("offers Opus 5.5 as the strongest tier and Haiku 5.5 as the fast tier", () => {
     expect(pickerModelForTier("strongest")).toBe("claude-opus-5-5");
-    expect(pickerModelForTier("fast")).toBe("claude-haiku-4-5-20251001");
+    expect(pickerModelForTier("fast")).toBe("claude-haiku-5-5");
   });
 
   it("keeps Fable 5.1 selectable by id (registry) but off the curated rows", () => {

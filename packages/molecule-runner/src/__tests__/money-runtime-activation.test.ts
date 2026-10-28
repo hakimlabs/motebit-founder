@@ -408,10 +408,13 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
   // `defaultCreateMoneyRuntime` — the adapter-pattern injection that unblocks
   // the runtime→relay bridge (docs/doctrine/composition-preserves-enforcement.md):
   // a fake `SolanaRpcAdapter` lets the REAL composition root drive its real
-  // payment path with no live Solana RPC. The /task POST is stubbed to 500 so
-  // the hire returns immediately after the payment leg — `executeGrantedDelegation`
-  // exposes no receipt-poll timeout, and the payment leg (not the poll) is the
-  // assertion.
+  // payment path with no live Solana RPC. The /task POST is stubbed to a
+  // definitive 400 refusal so the hire returns immediately after the payment
+  // leg — `executeGrantedDelegation` exposes no receipt-poll timeout, and the
+  // payment leg (not the poll) is the assertion. Never a 5xx here: since #885 a
+  // transient submit failure is retried with the same proof on the REAL
+  // 1s/3s/9s backoff, so a 500 made this test sleep 13 s of wall clock and
+  // time out under load (#1147). A 400 is not retried (`isRetryableSubmitStatus`).
   // ─────────────────────────────────────────────────────────────────────
 
   const FAKE_SIG =
@@ -461,8 +464,10 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
           return jsonResponse({ allowed: url.includes("acknowledge_no_history_risk=true") });
         if (url.includes("/listing"))
           return jsonResponse({ pricing: [{ capability: "research", unit_cost: 0.05 }] });
-        // Fail the submission fast — the payment leg has already run by here.
-        if (url.endsWith("/task")) return new Response("submit refused (test)", { status: 500 });
+        // Fail the submission fast and definitively (no #885 retry) — the
+        // payment leg has already run by here.
+        if (url.endsWith("/task"))
+          return jsonResponse({ code: "malformed_request", error: "submit refused (test)" }, 400);
         return new Response("not found", { status: 404 });
       }),
     );
@@ -484,7 +489,7 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
     const grant = await selfIssueGrant(identity, cfg.moneyExecution!);
     const token = await mintTick(grant, identity);
     stubToPaymentLeg();
-    await runtime.executeGrantedDelegation({
+    const exec = await runtime.executeGrantedDelegation({
       capability: "research",
       prompt: "authorized",
       delegation: { token, grant },
@@ -494,6 +499,8 @@ describe("defaultCreateMoneyRuntime — money-without-authority fails CLOSED at 
     // The injected rail flowed through the REAL builder to the payment path,
     // and the authorized grant let it fire — a real outbound spend attempt.
     expect(sent()).toBeGreaterThanOrEqual(1);
+    // ...and the refused submission ended on the first answer (no backoff).
+    expect(exec).toMatchObject({ ok: false });
   });
 
   it("R4 gates the sovereign WALLET at the composition root: an out-of-scope hire never fires the payment leg", async () => {

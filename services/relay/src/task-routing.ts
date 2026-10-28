@@ -45,6 +45,7 @@ import { defaultPeerFetch, readPeerRow, signDiscoverBody, writePeerRow } from ".
 import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
+import { UNSETTLED_CLAIM_IN_ARCHIVE, UNSETTLED_CLAIM_IN_QUEUE } from "./task-queue.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { verificationKeyFor } from "./identity-keys.js";
 import {
@@ -1819,18 +1820,35 @@ export async function evaluateSettlementEligibility(
  */
 export const TASK_ROUTE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Delete routes older than `TASK_ROUTE_RETENTION_MS`; returns the count. */
+/** The ids of every task holding a claimed-but-unsettled answer, in either store. */
+const UNSETTLED_CLAIM_TASK_IDS = `SELECT task_id FROM relay_task_queue WHERE ${UNSETTLED_CLAIM_IN_QUEUE}
+           UNION SELECT task_id FROM relay_task_answers WHERE ${UNSETTLED_CLAIM_IN_ARCHIVE}`;
+
+/**
+ * Delete routes older than `TASK_ROUTE_RETENTION_MS`; returns the count.
+ *
+ * The kept-claim law (#1152 M3): a task whose answer is claimed and not
+ * settled — in the queue OR the archive (`holdsUnsettledClaim`) — keeps its
+ * route AND its archived answer with no time limit. A replay needs all
+ * three stores (`answerTask` refuses `not_routed` without the route), and a
+ * claim that can no longer be replayed would leave the stale sweep to
+ * refund the delegator over the valid receipt.
+ */
 export function cleanupTaskRoutes(db: DatabaseDriver, now: number = Date.now()): number {
   const info = db
-    .prepare("DELETE FROM relay_task_routes WHERE created_at < ?")
+    .prepare(
+      `DELETE FROM relay_task_routes WHERE created_at < ?
+         AND task_id NOT IN (${UNSETTLED_CLAIM_TASK_IDS})`,
+    )
     .run(now - TASK_ROUTE_RETENTION_MS);
   // A task's archived answer (#890 round 9, `relay_task_answers`) lives as
   // long as its route: the archive reads it only through one — except an
-  // answer still claimed and UNSETTLED for a task still queued: it is the
-  // claim the settlement guards check, and the next retry settles it.
+  // answer still claimed and UNSETTLED (kept with no time limit, above), and
+  // an unsettled answer for a task still queued.
   const answers = db
     .prepare(
       `DELETE FROM relay_task_answers WHERE answered_at < ?
+         AND NOT ${UNSETTLED_CLAIM_IN_ARCHIVE}
          AND NOT (settled = 0 AND task_id IN (SELECT task_id FROM relay_task_queue))`,
     )
     .run(now - TASK_ROUTE_RETENTION_MS);

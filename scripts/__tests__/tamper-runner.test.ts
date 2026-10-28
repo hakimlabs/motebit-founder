@@ -290,6 +290,11 @@ describe("tamper-runner evidence", () => {
     expect(d.code).toBe(2);
   });
 
+  // The two halves of `only` are two tests, one entry each (#1147). As one
+  // test they were eleven vitest runs under one 180 s budget — each entry
+  // narrows to a different `red`, so neither chains onto the other's runs —
+  // and under the pre-push hook's load that budget ran out. Split, each
+  // carries five or six runs, like the other one-entry tests here.
   it("only: runs just the red test (a failing sibling is never run)", () => {
     const d = drive(
       fx!,
@@ -301,6 +306,18 @@ describe("tamper-runner evidence", () => {
           only: true,
           edits: [BREAK_SUB],
         },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["GREEN"]);
+    expect(d.out).toMatch(/^GREEN +narrowed, sibling broken +\("sum adds two numbers" passed\)$/m);
+    expect(d.code).toBe(1);
+  });
+
+  it("only: the narrowed red test still runs, and its failure is a RED", () => {
+    const d = drive(
+      fx!,
+      [
         {
           name: "narrowed, red broken",
           ...SUM_TEST,
@@ -311,9 +328,8 @@ describe("tamper-runner evidence", () => {
       ],
       1,
     );
-    expect(verdicts(d), d.out).toEqual(["GREEN", "RED"]);
-    expect(d.out).toMatch(/^GREEN +narrowed, sibling broken +\("sum adds two numbers" passed\)$/m);
-    expect(d.code).toBe(1);
+    expect(verdicts(d), d.out).toEqual(["RED"]);
+    expect(d.code).toBe(0);
   });
 
   it("only without red aborts (exit 2)", () => {

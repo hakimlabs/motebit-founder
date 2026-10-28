@@ -18,6 +18,7 @@ import {
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { reconcileLedger } from "../accounts.js";
 import {
+  closeEvidenceWindow,
   AUTH_HEADER as AUTH,
   JSON_AUTH,
   jsonAuthWithIdempotency,
@@ -197,6 +198,7 @@ describe("Dispute Cycle E2E", () => {
     expect(blockedMidDispute.status).toBe(402);
 
     // === STEP 7: RESOLVE DISPUTE — REFUND TO DELEGATOR ===
+    closeEvidenceWindow(relay, disputeId);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
       method: "POST",
       headers: JSON_AUTH,
@@ -345,6 +347,7 @@ describe("Dispute Cycle E2E", () => {
     );
     const { dispute_id: disputeId } = (await disputeRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, disputeId);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
       method: "POST",
       headers: JSON_AUTH,

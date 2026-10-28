@@ -72,7 +72,7 @@ export interface AIResponse {
 export const ANTHROPIC_CANONICAL_URL = "https://api.anthropic.com";
 
 // @public
-export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-opus-5-5", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
+export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-opus-5-5", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
 
 // @public
 export const ANTHROPIC_PICKER: readonly AnthropicPickerOption[];
@@ -280,7 +280,7 @@ export const DEEPSEEK_CANONICAL_URL = "https://api.deepseek.com";
 export const DEEPSEEK_MODELS: readonly ["deepseek-chat"];
 
 // @public
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
 
 // @public
 export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig;
@@ -298,6 +298,9 @@ export const DEFAULT_GOVERNANCE_CONFIG: GovernanceConfig;
 export const DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile";
 
 // @public
+export const DEFAULT_HISTORY_TOKENS = 8000;
+
+// @public
 export const DEFAULT_LOCAL_SERVER_MODEL = "qwen3";
 
 // @public
@@ -307,7 +310,7 @@ export const DEFAULT_MOTEBIT_CLOUD_URL = "https://api.motebit.com";
 export const DEFAULT_OLLAMA_MODEL = "qwen3";
 
 // @public
-export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
+export const DEFAULT_OPENAI_MODEL = "gpt-5.4";
 
 // @public
 export const DEFAULT_PIXEL_CONSENT: PixelConsentState;
@@ -464,6 +467,9 @@ export const GROQ_CANONICAL_URL = "https://api.groq.com/openai/v1";
 export const GROQ_MODELS: readonly ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
 
 // @public
+export function historyTokenBudget(model: string | null | undefined): number;
+
+// @public
 export function inferenceIsFreeToUser(mode: ProviderMode): boolean;
 
 // @public (undocumented)
@@ -489,6 +495,9 @@ export function isLocalServerUrl(url: string | undefined | null): boolean;
 
 // @public
 export function isPublicAddress(address: string): boolean;
+
+// @public
+export const LARGE_WINDOW_HISTORY_TOKENS = 64000;
 
 // @public (undocumented)
 export interface LightingSpec {

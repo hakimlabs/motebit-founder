@@ -59,18 +59,18 @@ const MUTATIONS: readonly { name: string; from: string; to: string }[] = [
   },
   {
     name: "default label",
-    from: '"Claude Sonnet 5 — recommended"',
-    to: '"Claude Sonnet 5.1 — recommended"',
+    from: '"Claude Sonnet 5.5 — recommended"',
+    to: '"Claude Sonnet 5.6 — recommended"',
   },
   {
     name: "fast id",
-    from: '{ id: "claude-haiku-4-5-20251001", label',
+    from: '{ id: "claude-haiku-5-5", label',
     to: '{ id: "claude-sonnet-4-6", label',
   },
   {
     name: "fast label",
-    from: '"Claude Haiku 4.5 — fastest"',
-    to: '"Claude Haiku 5 — fastest"',
+    from: '"Claude Haiku 5.5 — fastest"',
+    to: '"Claude Haiku 5.6 — fastest"',
   },
 ];
 

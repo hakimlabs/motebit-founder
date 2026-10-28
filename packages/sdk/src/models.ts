@@ -22,12 +22,13 @@ export const ANTHROPIC_MODELS = [
   "claude-sonnet-5-5",
   "claude-sonnet-5",
   "claude-sonnet-4-6",
+  "claude-haiku-5-5",
   "claude-haiku-4-5-20251001",
   "claude-opus-4-5-20251101",
   "claude-sonnet-4-5-20250929",
 ] as const;
 
-/** OpenAI models: gpt-5.4 (strongest), gpt-5.4-mini (default), gpt-5.4-nano (fast). */
+/** OpenAI models: gpt-5.4 (strongest, and the default), gpt-5.4-mini, gpt-5.4-nano (fast). */
 export const OPENAI_MODELS = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
 
 /** Google models: 2.5 pro (strongest), 2.5 flash (default), 2.5 flash-lite (fast). */
@@ -186,10 +187,12 @@ export const PROXY_MODELS = [
 // === Default Models ===
 
 /** Default Anthropic model — the picker's `recommended` row (#654). */
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
 
-/** Default OpenAI model. */
-export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
+/** Default OpenAI model. The full model, not mini: the BYOK user pays for the
+ *  turn, and the default answers for motebit's quality, so it is the best
+ *  general model the vendor serves (reviewed 2026-10-25). */
+export const DEFAULT_OPENAI_MODEL = "gpt-5.4";
 
 /** Default Google model. */
 export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash";
@@ -502,13 +505,59 @@ export function defaultModelForProvider(provider: ModelDefaultProvider): string 
  */
 export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
   anthropic: "2026-12-31",
-  openai: "2026-10-31",
-  google: "2026-10-31",
-  deepseek: "2026-10-31",
-  groq: "2026-10-31",
-  "local-server": "2026-10-31",
-  proxy: "2026-10-31",
+  openai: "2026-12-31",
+  // Reviewed 2026-10-26, each default kept:
+  // - local-server `qwen3`: still the current balanced, tool-capable local family.
+  // - proxy `claude-sonnet-4-6`: moving Motebit Cloud to the 5.5 family is a
+  //   pricing and catalog decision (MOTEBIT_CLOUD_ACCEPTED_MODELS); it is not
+  //   taken here.
+  // - google / deepseek / groq: these vendors' live catalogs were NOT witnessed.
+  //   The drift gate has no keys for them (PROVIDER_VERIFICATION: available),
+  //   so the defaults are kept on purpose, not as verified current.
+  google: "2027-01-31",
+  deepseek: "2027-01-31",
+  groq: "2027-01-31",
+  "local-server": "2027-01-31",
+  proxy: "2027-01-31",
 };
+
+// === Conversation history budget ===
+//
+// How much conversation history one turn may carry, by model. Born from the
+// intelligence-parity bench (run 40198849734, Opus 5.5): a flat 8,000-token
+// budget, set for small local windows, cut a 7,900-token conversation to
+// ~2,700 tokens on a 1M-token model, and the answer that needed turn 1 scored
+// 4.63 against 9.25 with the full history. The vendor apps keep the whole
+// conversation; a motebit forgot its start.
+//
+// The big budget goes only to vendors whose current models all carry windows
+// far above it. Every other vendor, local servers and unknown ids keep the
+// conservative one: overflowing a small local window truncates silently,
+// which is worse than trimming honestly. Legacy OpenAI ids (`gpt-3.5*`,
+// `gpt-4`, `gpt-4-*`: 8k-16k windows) stay conservative. Motebit Cloud's
+// `auto` takes the large budget: every model the proxy can route it to has a
+// window of 128k or more. 64k, not the full window: Motebit
+// Cloud meters the same ids against a balance that starts at a $0.10 credit,
+// and the turn re-sends its history every round.
+
+/** History tokens a turn may carry on a large-window vendor. */
+export const LARGE_WINDOW_HISTORY_TOKENS = 64_000;
+
+/** History tokens a turn may carry on any other model. */
+export const DEFAULT_HISTORY_TOKENS = 8_000;
+
+/** The history budget for `model`: large for Anthropic, current OpenAI and
+ *  Google ids and Cloud `auto`, conservative for everything else (and for no
+ *  model). */
+export function historyTokenBudget(model: string | null | undefined): number {
+  if (model == null || model.trim() === "") return DEFAULT_HISTORY_TOKENS;
+  if (model === MOTEBIT_CLOUD_AUTO_MODEL) return LARGE_WINDOW_HISTORY_TOKENS;
+  if (/^gpt-(?:3\.5|4(?:$|-\d|-32k))/i.test(model.trim())) return DEFAULT_HISTORY_TOKENS;
+  const vendor = modelVendorHint(model);
+  return vendor === "anthropic" || vendor === "openai" || vendor === "google"
+    ? LARGE_WINDOW_HISTORY_TOKENS
+    : DEFAULT_HISTORY_TOKENS;
+}
 
 // === Anthropic picker (#654) ===
 //
@@ -538,8 +587,8 @@ export interface AnthropicPickerOption {
  *  (asserted in tests). */
 export const ANTHROPIC_PICKER: readonly AnthropicPickerOption[] = [
   { id: "claude-opus-5-5", label: "Claude Opus 5.5 — most capable", tier: "strongest" },
-  { id: DEFAULT_ANTHROPIC_MODEL, label: "Claude Sonnet 5 — recommended", tier: "default" },
-  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — fastest", tier: "fast" },
+  { id: DEFAULT_ANTHROPIC_MODEL, label: "Claude Sonnet 5.5 — recommended", tier: "default" },
+  { id: "claude-haiku-5-5", label: "Claude Haiku 5.5 — fastest", tier: "fast" },
 ] as const;
 
 /** The picker's model id for a tier. */

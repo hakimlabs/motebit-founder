@@ -6,6 +6,7 @@ import {
   extractActions,
   actionsToStateUpdates,
   stripTags,
+  stripForSpeech,
 } from "../index";
 import {
   __test_buildToolResultContentForAnthropic as toAnthropicContent,
@@ -165,9 +166,21 @@ describe("stripTags", () => {
     expect(stripTags(text)).toBe("Hello! How are you?");
   });
 
-  it("removes action text from asterisks", () => {
-    const text = "Hello! *drifts slightly closer* How are you?";
-    expect(stripTags(text)).toBe("Hello! How are you?");
+  it("keeps Markdown emphasis: asterisks are content, not creature actions (#1076)", () => {
+    expect(stripTags("Hello! *drifts slightly closer* How are you?")).toBe(
+      "Hello! *drifts slightly closer* How are you?",
+    );
+    // The intelligence-parity bench's own failing answer: the bold key terms
+    // used to be deleted, leaving "1. Client → Server: ** After that…".
+    const answer =
+      "Three packets.\n\n1. Client → Server: **SYN**\n2. Server → Client: **SYN-ACK**\n3. Client → Server: **ACK**\n\nAfter that, the connection is established.";
+    expect(stripTags(answer)).toBe(answer);
+  });
+
+  it("keeps lists, paragraphs and code indentation intact (#1076)", () => {
+    const code =
+      "Here:\n\n```ts\nclass LRU {\n  private map = new Map();\n  get(k: string) {\n    return this.map.get(k);\n  }\n}\n```\n\n- one\n- two";
+    expect(stripTags(code)).toBe(code);
   });
 
   it("removes both memory and state tags", () => {
@@ -180,12 +193,11 @@ describe("stripTags", () => {
 
   it("removes all tag types together", () => {
     const text =
-      'Hi *smiles* <state field="curiosity" value="0.8"/> How are you? <memory confidence="0.9" sensitivity="none">fact</memory>';
+      'Hi **there** <state field="curiosity" value="0.8"/> How are you? <memory confidence="0.9" sensitivity="none">fact</memory>';
     const result = stripTags(text);
-    expect(result).not.toContain("*");
     expect(result).not.toContain("<state");
     expect(result).not.toContain("<memory");
-    expect(result).toBe("Hi How are you?");
+    expect(result).toBe("Hi **there** How are you?");
   });
 
   it("collapses excessive newlines", () => {
@@ -298,6 +310,9 @@ describe("modelRejectsSamplingParams — Opus 4.7+/Claude-5 request-shape guard"
       // Sonnet 5.5 — the live id the scheduled catalog-drift gate reported
       // missing; same Claude-5 family as its siblings (regex unchanged).
       "claude-sonnet-5-5",
+      // Haiku 5.5 — the picker's fast tier; unlike Haiku 4.5 it 400s on
+      // non-default sampling values and `budget_tokens`.
+      "claude-haiku-5-5",
     ]) {
       expect(modelRejectsSamplingParams(m)).toBe(true);
     }
@@ -1017,5 +1032,15 @@ describe("fetchWithConnectionTimeout", () => {
     const res = await fetchWithConnectionTimeout("https://example.com", { method: "GET" }, 5000);
     expect(res.status).toBe(200);
     expect(await res.text()).toBe("hello");
+  });
+});
+
+describe("stripForSpeech", () => {
+  it("speaks the words of Markdown, not the marks (#1076)", () => {
+    expect(
+      stripForSpeech(
+        '## Steps\n\n1. Client sends **SYN**\n- then `ACK` *quickly* <state field="warmth" value="0.5"/>',
+      ),
+    ).toBe("Steps\n\n1. Client sends SYN\nthen ACK quickly");
   });
 });

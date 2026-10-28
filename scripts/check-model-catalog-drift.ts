@@ -96,7 +96,7 @@ function checkDefaultReviewDates(): void {
 /** Families whose request shape is the LEGACY one (sampling params
  * accepted, budget_tokens thinking). A live id matching neither this nor
  * `modelRejectsSamplingParams` is an unclassified NEW family. */
-const LEGACY_FAMILY = /^claude-(?:2|3|opus-4-[0-6]|sonnet-4-[0-6]|haiku-[0-9])/i;
+const LEGACY_FAMILY = /^claude-(?:2|3|opus-4-[0-6]|sonnet-4-[0-6]|haiku-[0-4])/i;
 
 async function fetchLiveIds(apiKey: string): Promise<string[]> {
   const resp = await fetch("https://api.anthropic.com/v1/models?limit=100", {

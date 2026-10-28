@@ -28,6 +28,7 @@ import {
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import {
+  closeEvidenceWindow,
   AUTH_HEADER as AUTH,
   API_TOKEN,
   JSON_AUTH,
@@ -640,6 +641,7 @@ describe("P2P Settlement Cycle E2E", () => {
     expect(disputeBody.p2p_dispute).toBe(true);
 
     // Resolve — no funds move (amount_locked = 0)
+    closeEvidenceWindow(relay, disputeBody.dispute_id);
     const resolveRes = await relay.app.request(
       `/api/v1/disputes/${disputeBody.dispute_id}/resolve`,
       {

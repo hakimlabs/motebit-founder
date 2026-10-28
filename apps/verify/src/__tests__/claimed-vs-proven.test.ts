@@ -70,7 +70,6 @@ import {
   linkHash,
   openPage,
   rung,
-  settled,
   type MockCtx,
 } from "./page-harness.js";
 
@@ -809,6 +808,47 @@ async function buildCases(): Promise<Case[]> {
 // Minted at collection time so every case is its own named test.
 const cases = await buildCases();
 
+/**
+ * Resolve when the page's run for this case has FINISHED — on the event, never
+ * on elapsed time (#1147). The harness's `settled()` polls every 20 ms under a
+ * 4 s budget and then sleeps 30 ms "to let an in-flight run finish": ~50 ms of
+ * timers per case (most of this file's wall time was idle), and a verdict
+ * that depends on the scheduler under load. Here there is no budget of its own
+ * (the test timeout is the only bound) and no sleep.
+ *
+ * The signal is the page's own: `run()` disables the Verify button before its
+ * first await and re-enables it in its `finally` only for the latest run
+ * (main.ts), AFTER that run's final DOM write. So "button enabled AND a final
+ * card (a result card, or the explicit not-verified state)" holds exactly when
+ * the latest run has written its verdict. The verification path has no timers
+ * (only the 400 ms edit debounce, which this file never triggers), so every
+ * step between import and verdict is a microtask or a crypto job — a
+ * MutationObserver sees each DOM change as it lands.
+ */
+async function runFinished(): Promise<void> {
+  const button = document.getElementById("verify-btn") as HTMLButtonElement;
+  const done = (): boolean => {
+    const c = container();
+    const final =
+      c.querySelector(".result-card") !== null || /Not verified/.test(c.textContent ?? "");
+    return final && !button.disabled;
+  };
+  if (done()) return;
+  await new Promise<void>((resolve) => {
+    const observer = new MutationObserver(() => {
+      if (!done()) return;
+      observer.disconnect();
+      resolve();
+    });
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+  });
+}
+
 function mark(key: string): "ok" | "skip" | "fail" | null {
   const m = rung(key)?.querySelector(".check-mark");
   if (m === null || m === undefined) return null;
@@ -877,7 +917,7 @@ describe("claimed vs proven: every signer- or relay-controlled field", () => {
         ctx: c.ctx,
         ...(c.rpc !== undefined ? { rpc: c.rpc } : {}),
       });
-      await settled();
+      await runFinished();
       expect(check(c).join("; ")).toBe("");
     });
   }

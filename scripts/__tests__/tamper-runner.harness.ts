@@ -46,7 +46,7 @@ export interface Fx {
   leak: string;
   /** A path prefix outside every slot (FX_STATE) for fixture tests that count runs. */
   state: string;
-  /** A free port for port.fx.mjs (handed to it as FX_PORT). */
+  /** A free port below the ephemeral range for port.fx.mjs (handed to it as FX_PORT): see fixedPort. */
   port: number;
 }
 
@@ -56,16 +56,72 @@ export interface Driven {
   summary: RunTampersSummary;
 }
 
-function freePort(): Promise<number> {
-  return new Promise((res, rej) => {
+/**
+ * The OS's ephemeral port range: where the kernel picks a port for every
+ * `listen(0)` and every outgoing connection on the machine. Linux: /proc;
+ * macOS/BSD: sysctl. Neither readable: 32768-65535, which covers Linux's
+ * default (32768-60999) and the IANA range macOS and Windows use (49152-65535).
+ */
+export function ephemeralPortRange(): [number, number] {
+  try {
+    const [lo, hi] = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8")
+      .trim()
+      .split(/\s+/)
+      .map(Number);
+    if (Number.isInteger(lo) && Number.isInteger(hi)) return [lo!, hi!];
+  } catch {
+    // not Linux
+  }
+  try {
+    const [lo, hi] = execFileSync(
+      "sysctl",
+      ["-n", "net.inet.ip.portrange.first", "net.inet.ip.portrange.last"],
+      { encoding: "utf8", env: cleanEnv() },
+    )
+      .trim()
+      .split(/\s+/)
+      .map(Number);
+    if (Number.isInteger(lo) && Number.isInteger(hi)) return [lo!, hi!];
+  } catch {
+    // no sysctl
+  }
+  return [32768, 65535];
+}
+
+function bindable(port: number): Promise<boolean> {
+  return new Promise((res) => {
     const s = createServer();
-    s.once("error", rej);
-    s.listen(0, "127.0.0.1", () => {
-      const addr = s.address();
-      const port = typeof addr === "object" && addr != null ? addr.port : 0;
-      s.close(() => res(port));
-    });
+    s.once("error", () => res(false));
+    s.listen(port, "127.0.0.1", () => s.close(() => res(true)));
   });
+}
+
+/** Lowest port FX_PORT is drawn from: above the registered ports most services pin. */
+export const FIXED_PORT_FLOOR = 20_000;
+
+/**
+ * A port for port.fx.mjs / orphan.fx.mjs (FX_PORT) that no OTHER process can
+ * be handed while a test holds it between runs (#1147). The self-tests keep
+ * one port for a whole test (up to eight vitest runs, minutes under load) and
+ * bind it only during each run. A port from `listen(0)` comes out of the
+ * ephemeral range, so any other test on a busy machine — the pre-push hook's
+ * suite, a second push's — that listens on port 0 or opens a connection can be
+ * given it in a gap, and the next run fails EADDRINUSE: C1 came back
+ * INCONCLUSIVE (reproduced: a process cycling listen(0) servers turns C1 red
+ * in one run). Below the ephemeral range the kernel never assigns a port by
+ * itself, so only a process that pins this exact port can collide.
+ */
+async function fixedPort(): Promise<number> {
+  const [lo] = ephemeralPortRange();
+  const top = Math.min(lo, 32_768);
+  if (top - FIXED_PORT_FLOOR < 1000) {
+    throw new Error(`ephemeral port range starts at ${lo}: no room below it for FX_PORT`);
+  }
+  for (let i = 0; i < 50; i++) {
+    const port = FIXED_PORT_FLOOR + Math.floor(Math.random() * (top - FIXED_PORT_FLOOR));
+    if (await bindable(port)) return port;
+  }
+  throw new Error(`no bindable port in ${FIXED_PORT_FLOOR}-${top - 1} after 50 tries`);
 }
 
 export function git(fx: Fx, args: string[]): string {
@@ -80,7 +136,15 @@ export async function setupFixture(): Promise<Fx> {
   cpSync(FIXTURE, repo, { recursive: true });
   const json = (rel: string, v: unknown): void =>
     writeFileSync(join(repo, rel), `${JSON.stringify(v, null, 2)}\n`);
-  json("package.json", { name: "fxroot", private: true });
+  // The monorepo's pnpm, pinned: with no `packageManager` a corepack-shimmed
+  // pnpm resolves, in the fresh HOME the runner gives each slot, to whatever
+  // pnpm is latest on the registry — a native pnpm (12.x) that puts the
+  // command it execs in a process group of its own — so what a cell runs "in
+  // the test's own process group" would depend on the registry (#1160).
+  const { packageManager } = JSON.parse(readFileSync(join(MONOREPO, "package.json"), "utf8")) as {
+    packageManager?: string;
+  };
+  json("package.json", { name: "fxroot", private: true, packageManager });
   json("packages/fx/package.json", {
     name: "fx",
     private: true,
@@ -101,7 +165,7 @@ export async function setupFixture(): Promise<Fx> {
     home,
     leak: join(base, "leak"),
     state: join(base, "state"),
-    port: await freePort(),
+    port: await fixedPort(),
   };
   execFileSync("git", ["init", "-q"], { cwd: repo, env: cleanEnv() });
   git(fx, ["add", "-A"]);

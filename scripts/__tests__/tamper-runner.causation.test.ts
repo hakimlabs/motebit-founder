@@ -88,12 +88,41 @@ describe("tamper-runner causation", () => {
     },
   );
 
+  it("C1: a process a run leaves in a process group of its own but inside the run's session (setpgid) is the run's: never an orphan, and it dies with its run", () => {
+    const d = drive(
+      fx!,
+      [1, 2, 3].map((k) => ({
+        name: `orphan: comment only ${k}`,
+        ...ORPHAN,
+        edits: [COMMENT_ONLY],
+      })),
+      1,
+      { env: { FX_HOLD: "60000", FX_PGRP: "1" } },
+    );
+    // The premise: each holder that got as far as recording itself led a
+    // process group of its own (so the run's group kill cannot reach it).
+    const pgrp = existsSync(`${fx!.state}-pgrp`)
+      ? readFileSync(`${fx!.state}-pgrp`, "utf8").split("\n").filter(Boolean)
+      : [];
+    expect(pgrp.length, d.out).toBeGreaterThan(0);
+    for (const l of pgrp) {
+      const [pid, pgid] = l.split(" ");
+      expect(pgid, l).toBe(pid);
+    }
+    expect(verdicts(d), d.out).toEqual(["GREEN", "GREEN", "GREEN"]);
+    expect(d.code).toBe(1);
+    expect(orphans().length, d.out).toBeGreaterThan(0);
+    expect(orphans().filter(alive), d.out).toEqual([]);
+  });
+
   it("C1: a process that escapes its run's process group (own session) is an orphan: the run is not green, and it is killed", () => {
     const d = drive(fx!, [{ name: "orphan: comment only", ...ORPHAN, edits: [COMMENT_ONLY] }], 1, {
       env: { FX_HOLD: "60000", FX_DETACH: "1" },
     });
     expect(verdicts(d), d.out).not.toContain("RED");
     expect(d.out).toMatch(/BASELINE NOT GREEN: fx orphan\.fx\.mjs +\(orphan: pid \d+/);
+    // The report names the process (its command line), on every platform.
+    expect(d.out).toMatch(/\(orphan: pid \d+ \([^)?]*node -e /);
     expect(d.code).toBe(2);
     expect(orphans().length, d.out).toBeGreaterThan(0);
     expect(orphans().filter(alive), d.out).toEqual([]);

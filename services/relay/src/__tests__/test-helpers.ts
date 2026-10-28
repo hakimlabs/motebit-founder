@@ -14,6 +14,7 @@ import type { AgentTask } from "@motebit/sdk";
 import { AgentTaskStatus, asMotebitId, asAllocationId, asGoalId } from "@motebit/sdk";
 import { allocateBudget, computeGrossAmount } from "@motebit/market";
 import { TaskQueue } from "../task-queue.js";
+import type { TaskQueueEntry } from "../tasks.js";
 import { recordTaskRoute } from "../task-routing.js";
 import type { P2pPaymentChain } from "../p2p-payer.js";
 import { fakeFacilitatorClient } from "./x402-fake-facilitator.js";
@@ -356,6 +357,12 @@ export interface SeedX402PaidTaskArgs {
   unitCostUsd: number;
   /** Override the x402 tx hash; defaults to a fresh `fakeX402TxHash()`. */
   txHash?: string;
+  /**
+   * The executor admission pins (`pinned_executor`, task-pin.ts) — a
+   * `motebit delegate --target` submission pins the path agent. Unset leaves
+   * the seeded entry unpinned, as every earlier caller expects.
+   */
+  pinnedExecutor?: string;
 }
 
 /**
@@ -393,7 +400,8 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
     x402_tx_hash: txHash,
     x402_network: X402_TEST_CONFIG.network,
     settlement_mode: "relay",
-  });
+    ...(args.pinnedExecutor != null ? { pinned_executor: args.pinnedExecutor } : {}),
+  } as TaskQueueEntry);
 
   // Mirror: x402 auto-deposit to the delegator's virtual account.
   creditAccount(
@@ -520,4 +528,20 @@ export function seedP2pSubTask(relay: SyncRelay, args: SeedP2pSubTaskArgs): stri
   });
 
   return taskId;
+}
+
+/**
+ * Close a dispute's §5.3 evidence window: set its `evidence_deadline` (the
+ * relay's receive time + 48 h at filing) one millisecond in the past, so
+ * `/resolve` — refused with 409 `DISPUTE_EVIDENCE_WINDOW_OPEN` while the
+ * window is open — proceeds. The same move the suite makes for the appeal
+ * window (`resolved_at` in the past). Returns the deadline it wrote.
+ */
+export function closeEvidenceWindow(relay: SyncRelay, disputeId: string): number {
+  const past = Date.now() - 1;
+  const res = relay.moteDb.db
+    .prepare("UPDATE relay_disputes SET evidence_deadline = ? WHERE dispute_id = ?")
+    .run(past, disputeId);
+  if (res.changes !== 1) throw new Error(`closeEvidenceWindow: no dispute ${disputeId}`);
+  return past;
 }

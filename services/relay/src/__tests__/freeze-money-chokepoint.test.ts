@@ -66,6 +66,7 @@ import { durableFromSendUsdc } from "./durable-payout-fake.js";
 import { computeGrossAmount } from "@motebit/market";
 import { PLATFORM_FEE_RATE } from "@motebit/protocol";
 import {
+  closeEvidenceWindow,
   createTestRelay,
   createAgent,
   JSON_AUTH,
@@ -74,7 +75,7 @@ import {
 } from "./test-helpers.js";
 import { createMotebitDatabase } from "@motebit/persistence";
 import { recordTaskRoute } from "../task-routing.js";
-import { TaskQueue, UNSETTLED_CLAIM_HOLD_MS } from "../task-queue.js";
+import { TaskQueue } from "../task-queue.js";
 import { refundExhaustedForward } from "../index.js";
 import { cutAgentSettlementBatch, cutBatch } from "../anchoring.js";
 import { advanceRelayHorizon } from "../horizon.js";
@@ -1385,7 +1386,7 @@ describe("freeze — the background writers a pass can carry past the freeze", (
       await freeze(w.relay);
       // The freeze outlasts the entry's expiry by more than the claim hold.
       db.prepare("UPDATE relay_task_queue SET expires_at = ? WHERE task_id = ?").run(
-        Date.now() - UNSETTLED_CLAIM_HOLD_MS - 60_000,
+        Date.now() - 8 * 24 * 60 * 60 * 1000,
         S,
       );
       w.q.cleanup();
@@ -1906,6 +1907,7 @@ describe("freeze — a dispute's round-2 finalize", () => {
         ),
       });
       expect(filed.status, await filed.clone().text()).toBe(200);
+      closeEvidenceWindow(relay, disputeId);
       const resolved = await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
         method: "POST",
         headers: JSON_AUTH,

@@ -22,7 +22,7 @@ import type {
   DisputeEvidenceType,
   DisputeRequest,
 } from "@motebit/protocol";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { closeEvidenceWindow, AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 // === Test keystore ===
 //
@@ -382,6 +382,7 @@ describe("Dispute: evidence + resolve", () => {
     const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -408,6 +409,7 @@ describe("Dispute: evidence + resolve", () => {
     const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -440,6 +442,7 @@ describe("Dispute: evidence + resolve", () => {
       respondent: relayMotebitId,
     });
 
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -480,6 +483,7 @@ describe("Dispute: evidence + resolve", () => {
       respondent: "wrk-ev",
     });
 
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -510,6 +514,7 @@ describe("Dispute: evidence + resolve", () => {
     const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, dispute_id);
     const first = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -523,8 +528,10 @@ describe("Dispute: evidence + resolve", () => {
     const firstBody = (await first.json()) as { resolution: string; resolved_at: number };
     expect(firstBody.resolution).toBe("upheld");
 
-    // Second call with DIFFERENT body — cached path returns first's
-    // resolution, not the new one.
+    // Second call with a DIFFERENT verdict — nothing re-resolves, and the
+    // relay never answers 200 with a verdict other than the caller's
+    // (dispute-v1 §6.6): 409 with the standing record, the first call's.
+    closeEvidenceWindow(relay, dispute_id);
     const second = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -534,12 +541,32 @@ describe("Dispute: evidence + resolve", () => {
         fund_action: "release_to_worker",
       }),
     });
-    expect(second.status).toBe(200);
-    const secondBody = (await second.json()) as { resolution: string; resolved_at: number };
-    expect(secondBody.resolution).toBe("upheld"); // first call's outcome, not second's
-    expect(secondBody.resolved_at).toBe(firstBody.resolved_at);
+    expect(second.status).toBe(409);
+    const secondBody = (await second.json()) as {
+      code: string;
+      resolution: { resolution: string; resolved_at: number };
+    };
+    expect(secondBody.code).toBe("DISPUTE_RESOLUTION_NOT_COMMITTED");
+    expect(secondBody.resolution.resolution).toBe("upheld"); // first call's outcome
+    expect(secondBody.resolution.resolved_at).toBe(firstBody.resolved_at);
 
-    // Only one resolution row inserted (cached path skipped the second insert)
+    // Third call with the SAME verdict — an idempotent replay: 200 with the
+    // recorded resolution (crash-recovery and double-click safety net).
+    const third = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        resolution: "upheld",
+        rationale: "replay",
+        fund_action: "refund_to_delegator",
+      }),
+    });
+    expect(third.status).toBe(200);
+    const thirdBody = (await third.json()) as { resolution: string; resolved_at: number };
+    expect(thirdBody.resolution).toBe("upheld");
+    expect(thirdBody.resolved_at).toBe(firstBody.resolved_at);
+
+    // Only one resolution row inserted (cached path skipped the later inserts)
     const count = relay.moteDb.db
       .prepare("SELECT COUNT(*) as n FROM relay_dispute_resolutions WHERE dispute_id = ?")
       .get(dispute_id) as { n: number };
@@ -560,6 +587,7 @@ describe("Dispute: evidence + resolve", () => {
       fund_action: "split",
     });
     const headers = { "Content-Type": "application/json", ...AUTH_HEADER };
+    closeEvidenceWindow(relay, dispute_id);
     const [r1, r2] = await Promise.all([
       relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
         method: "POST",
@@ -640,6 +668,7 @@ describe("Dispute: evidence + resolve", () => {
     // Now /resolve should aggregate from the persisted votes without
     // re-fanning-out (no peers configured; a fresh orchestrator call
     // would 503).
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -666,6 +695,7 @@ describe("Dispute: evidence + resolve", () => {
     const openRes = await openDispute(relay, "alloc-ev", "del-ev", "wrk-ev", "task-ev");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, dispute_id);
     await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -735,6 +765,7 @@ describe("Dispute: appeal", () => {
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
     // Resolve first
+    closeEvidenceWindow(relay, dispute_id);
     await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -757,6 +788,7 @@ describe("Dispute: appeal", () => {
   it("refuses an appeal whose signed appealed_at is not now on the relay's clock (#1153)", async () => {
     const openRes = await openDispute(relay, "alloc-ap", "del-ap", "wrk-ap", "task-ap");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
+    closeEvidenceWindow(relay, dispute_id);
     await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -786,6 +818,7 @@ describe("Dispute: appeal", () => {
     const openRes = await openDispute(relay, "alloc-ap", "del-ap", "wrk-ap", "task-ap");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, dispute_id);
     await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -800,6 +833,7 @@ describe("Dispute: appeal", () => {
     await fileAppeal(relay, dispute_id, "del-ap", { reason: "Appeal 1" });
 
     // Resolve appeal to get back to resolved
+    closeEvidenceWindow(relay, dispute_id);
     await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -920,6 +954,7 @@ describe("Dispute: fund execution integrity", () => {
     const balanceBefore = beforeRow?.balance ?? 0;
 
     // Resolve with refund
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -956,6 +991,7 @@ describe("Dispute: fund execution integrity", () => {
     const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -992,6 +1028,7 @@ describe("Dispute: fund execution integrity", () => {
     const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -1023,6 +1060,7 @@ describe("Dispute: fund execution integrity", () => {
       .get("del-fund") as { balance: number } | undefined;
     const balanceBefore = beforeRow?.balance ?? 0;
 
+    closeEvidenceWindow(relay, dispute_id);
     const resolveRes = await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
@@ -1057,6 +1095,7 @@ describe("Dispute: fund execution integrity", () => {
     const openRes = await openDispute(relay, "alloc-fund", "del-fund", "wrk-fund", "task-fund");
     const { dispute_id } = (await openRes.json()) as { dispute_id: string };
 
+    closeEvidenceWindow(relay, dispute_id);
     await relay.app.request(`/api/v1/disputes/${dispute_id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },

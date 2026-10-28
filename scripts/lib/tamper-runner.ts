@@ -43,15 +43,20 @@
  *     error and no orphan, and vitest exited non-zero. `red:` is the EXACT
  *     full name (describe path + title, space-joined, as vitest's JSON
  *     reporter gives it) — a describe name or a bare title is not enough;
- *   - PROCESS HYGIENE: every process runs in its own process group. When it
- *     exits, the group is SIGKILLed and the runner VERIFIES no process is
- *     left in it and none works in the slot (cwd or an open file under the
+ *   - PROCESS HYGIENE: every process runs in its own session (detached:
+ *     setsid, so its session id and process group id are its pid). When it
+ *     exits, the group is SIGKILLed, so is every other process still in its
+ *     session (a descendant that moved to a process group of its own with
+ *     setpgid — a job-control shell, a native pnpm running the command it
+ *     execs — is still the run's), and the runner VERIFIES no process of the
+ *     run is left and none works in the slot (cwd or an open file under the
  *     slot's tree/TMPDIR/HOME, or the slot's TAMPER_RUNNER_SLOT token in its
- *     environment — Linux reads /proc; elsewhere `ps` + `lsof`, best effort,
- *     no environment check). One found outside the group escaped the kill:
- *     it is killed and the run is INCONCLUSIVE (`orphan: …`). On exit a
- *     final sweep does the same for every slot, and one that survives it
- *     fails the run (exit 2);
+ *     environment — Linux reads /proc; elsewhere `ps` + `lsof`, with the
+ *     session from getsid(2) through `perl` on macOS, best effort, no
+ *     environment check). One found outside the session escaped the kill (it
+ *     started a session of its own): it is killed and the run is INCONCLUSIVE
+ *     (`orphan: …`). On exit a final sweep does the same for every slot, and
+ *     one that survives it fails the run (exit 2);
  *   - an edit must be VALID CODE BY THE COMPILER: before the first edited
  *     run, the edited files are type-checked with the tree's `typescript`
  *     (nearest tsconfig.json, else strict NodeNext defaults with the hoisted
@@ -167,11 +172,12 @@
  * group) and remove every slot and its worktree registration. A SIGKILLed run
  * can do neither, so on startup, for any `motebit-tamper-*` worktree this repo
  * registered whose owner is a dead pid of THIS host and pid namespace, the
- * recorded groups still working inside the slot (a member's cwd under it,
- * read from /proc) are SIGKILLed first, then the slot is removed. A slot
- * recorded by another host or pid namespace is never touched (its pid means
- * nothing here); one with no owner record is removed only when its directory
- * is already gone.
+ * recorded groups (and any group a descendant made inside a recorded run's
+ * session) still working inside the slot (a member's cwd under it, read from
+ * /proc, or `ps` + `lsof` without it) are SIGKILLed first, then the slot is
+ * removed. A slot recorded by another host or pid namespace is never touched
+ * (its pid means nothing here); one with no owner record is removed only when
+ * its directory is already gone.
  *
  * Concurrency: default max(1, floor(cpus / 2)); `--concurrency=N` / `-j N`
  * on the tamper file's command line, or `TAMPER_CONCURRENCY=N`, overrides.
@@ -406,30 +412,67 @@ function readOwner(base: string): OwnerRecord | null {
 }
 
 /**
- * SIGKILL every recorded process group that still has a member working inside
- * `base` (its cwd under it: proof the group is this slot's, not a later
- * process that reused the id). Needs /proc; without it nothing is killed.
+ * SIGKILL every process group of a recorded run (the run's own, or one a
+ * descendant made inside its session: see `inRun`) that still has a member
+ * working inside `base` (its cwd under it: proof the group is this slot's,
+ * not a later process that reused the id). Linux: /proc. Elsewhere: `ps`
+ * (groups), `sessionIds` (sessions) and `lsof` (cwds), best effort.
  */
 function killLeftoverGroups(base: string, pgids: number[]): void {
   let baseReal: string;
-  let procs: string[];
   try {
     baseReal = realpathSync(base);
-    procs = readdirSync("/proc").filter((n) => /^\d+$/.test(n));
   } catch {
     return;
   }
+  const inBase = (cwd: string): boolean => `${cwd}${sep}`.startsWith(`${baseReal}${sep}`);
   const wanted = new Set(pgids);
   const proven = new Set<number>();
-  for (const n of procs) {
+  if (existsSync("/proc/self/stat")) {
+    let procs: string[];
     try {
-      const stat = readFileSync(`/proc/${n}/stat`, "utf8");
-      const pgrp = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
-      if (!wanted.has(pgrp)) continue;
-      const cwd = readlinkSync(`/proc/${n}/cwd`);
-      if (`${cwd}${sep}`.startsWith(`${baseReal}${sep}`)) proven.add(pgrp);
+      procs = readdirSync("/proc").filter((n) => /^\d+$/.test(n));
     } catch {
-      // exited meanwhile, or not ours to read
+      return;
+    }
+    for (const n of procs) {
+      try {
+        const stat = readFileSync(`/proc/${n}/stat`, "utf8");
+        const f = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        const pgrp = Number(f[2]);
+        if (!inRun(wanted, pgrp, Number(f[3]))) continue;
+        const cwd = readlinkSync(`/proc/${n}/cwd`);
+        if (inBase(cwd)) proven.add(pgrp);
+      } catch {
+        // exited meanwhile, or not ours to read
+      }
+    }
+  } else {
+    // No /proc (macOS): groups from ps, sessions from getsid(2), cwds from lsof.
+    try {
+      const groups = new Map<number, number>();
+      const ps = spawnSync("ps", ["-axo", "pid=,pgid="], { encoding: "utf8" });
+      for (const line of `${ps.stdout}`.split("\n")) {
+        const [pid, pgid] = line.trim().split(/\s+/).map(Number);
+        if (pid != null && pgid != null && Number.isInteger(pid) && Number.isInteger(pgid)) {
+          groups.set(pid, pgid);
+        }
+      }
+      const sids = sessionIds([...groups].filter(([, g]) => !wanted.has(g)).map(([p]) => p));
+      const lsof = spawnSync("lsof", ["-nP", "-a", "-d", "cwd", "-Fpn"], {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      let cur = 0;
+      for (const line of `${lsof.stdout}`.split("\n")) {
+        if (line.startsWith("p")) cur = Number(line.slice(1));
+        else if (line.startsWith("n") && inBase(line.slice(1))) {
+          const pgrp = groups.get(cur);
+          if (pgrp != null && inRun(wanted, pgrp, sids.get(cur) ?? null)) proven.add(pgrp);
+        }
+      }
+    } catch {
+      // best effort
     }
   }
   for (const g of proven) {
@@ -800,7 +843,49 @@ interface Hygiene {
 interface Proc {
   pid: number;
   pgid: number;
+  /** In one of the scanned runs (its process group or its session), not just found working in a slot. */
+  member: boolean;
   why: string;
+}
+
+/**
+ * Is a process in group `pgid` and session `sid` one of the runs `ids` names?
+ * Each run is spawned detached (setsid): its session id and process group id
+ * are both its pid. A descendant that only moves to a new process group
+ * (setpgid) stays in the run's session, so it is still the run's; only one
+ * that starts a session of its own (setsid) has left it. `sid` null: unknown
+ * (no session source), so only the group counts.
+ */
+function inRun(ids: Set<number>, pgid: number, sid: number | null): boolean {
+  return ids.has(pgid) || (sid != null && ids.has(sid));
+}
+
+/**
+ * getsid(2) of each pid where there is no /proc to read it from. macOS: one
+ * `perl` (shipped with the OS) making the syscall by number (SYS_getsid is 310
+ * in XNU's syscall table); `ps` there prints 0 for every session. Elsewhere,
+ * or when perl cannot run, empty: attribution falls back to the group alone,
+ * which can only over-report (an orphan), never hide one.
+ */
+function sessionIds(pids: number[]): Map<number, number> {
+  const out = new Map<number, number>();
+  if (process.platform !== "darwin" || pids.length === 0) return out;
+  try {
+    const r = spawnSync(
+      "perl",
+      ["-e", 'while (<STDIN>) { chomp; my $s = syscall(310, $_ + 0); print "$_ $s\\n"; }'],
+      { input: pids.join("\n"), encoding: "utf8" },
+    );
+    for (const line of `${r.stdout ?? ""}`.split("\n")) {
+      const [pid, sid] = line.trim().split(" ").map(Number);
+      if (pid != null && sid != null && Number.isInteger(pid) && Number.isInteger(sid) && sid > 0) {
+        out.set(pid, sid);
+      }
+    }
+  } catch {
+    // no perl: the group alone
+  }
+  return out;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -809,11 +894,19 @@ function under(p: string, dirs: string[]): boolean {
   return dirs.some((d) => p === d || p.startsWith(`${d}${sep}`));
 }
 
+function memberWhy(ids: Set<number>, pgid: number, sid: number | null): string {
+  return ids.has(pgid)
+    ? `in the run's process group ${pgid}`
+    : `in the run's session ${sid} (process group ${pgid})`;
+}
+
 /**
- * Every live (non-zombie) process, other than this one, that is in one of
- * `pgids` or works inside `h.dirs` (cwd or an open file) or carries `h.token`
- * in its environment. Linux: /proc. Elsewhere: `ps` (groups) and `lsof`
- * (cwd and open files), best effort; no environment check.
+ * Every live (non-zombie) process, other than this one, that is in one of the
+ * runs `pgids` names (its process group, or its session: see `inRun`) or
+ * works inside `h.dirs` (cwd or an open file) or carries `h.token` in its
+ * environment. Linux: /proc. Elsewhere: `ps` (groups), `sessionIds`
+ * (sessions) and `lsof` (cwd and open files), best effort; no environment
+ * check.
  */
 function scanProcesses(pgids: Set<number>, hs: Hygiene[]): Proc[] {
   const found: Proc[] = [];
@@ -833,8 +926,9 @@ function scanProcesses(pgids: Set<number>, hs: Hygiene[]): Proc[] {
         const f = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
         if (f[0] === "Z" || f[0] === "X") continue;
         const pgid = Number(f[2]);
-        if (pgids.has(pgid)) {
-          found.push({ pid, pgid, why: `in the run's process group ${pgid}` });
+        const sid = Number(f[3]);
+        if (inRun(pgids, pgid, sid)) {
+          found.push({ pid, pgid, member: true, why: memberWhy(pgids, pgid, sid) });
           continue;
         }
         let why: string | null = null;
@@ -871,27 +965,31 @@ function scanProcesses(pgids: Set<number>, hs: Hygiene[]): Proc[] {
             // not readable
           }
         }
-        if (why != null) found.push({ pid, pgid, why });
+        if (why != null) found.push({ pid, pgid, member: false, why });
       } catch {
         // exited meanwhile
       }
     }
     return found;
   }
-  // No /proc (macOS): groups from ps, cwd and open files from lsof.
+  // No /proc (macOS): groups from ps, sessions from getsid(2), cwd and open
+  // files from lsof.
   const seen = new Set<number>();
   try {
     const ps = spawnSync("ps", ["-axo", "pid=,pgid=,stat="], { encoding: "utf8" });
+    const rows: [number, number][] = [];
     for (const line of `${ps.stdout}`.split("\n")) {
       const [pid, pgid, st] = line.trim().split(/\s+/);
       if (pid == null || pgid == null || (st ?? "").startsWith("Z")) continue;
-      if (Number(pid) === process.pid || !pgids.has(Number(pgid))) continue;
-      seen.add(Number(pid));
-      found.push({
-        pid: Number(pid),
-        pgid: Number(pgid),
-        why: `in the run's process group ${pgid}`,
-      });
+      if (Number(pid) === process.pid) continue;
+      rows.push([Number(pid), Number(pgid)]);
+    }
+    const sids = sessionIds(rows.filter(([, g]) => !pgids.has(g)).map(([p]) => p));
+    for (const [pid, pgid] of rows) {
+      const sid = sids.get(pid) ?? null;
+      if (!inRun(pgids, pgid, sid)) continue;
+      seen.add(pid);
+      found.push({ pid, pgid, member: true, why: memberWhy(pgids, pgid, sid) });
     }
     const lsof = spawnSync("lsof", ["-nP", "-Fpn"], {
       encoding: "utf8",
@@ -907,7 +1005,7 @@ function scanProcesses(pgids: Set<number>, hs: Hygiene[]): Proc[] {
         under(line.slice(1), dirs)
       ) {
         seen.add(cur);
-        found.push({ pid: cur, pgid: -1, why: `open file ${line.slice(1)}` });
+        found.push({ pid: cur, pgid: -1, member: false, why: `open file ${line.slice(1)}` });
       }
     }
   } catch {
@@ -925,11 +1023,12 @@ function killQuietly(pid: number): void {
 }
 
 /**
- * After a run closed: SIGKILL its whole process group, then VERIFY that no
- * process of the group is left and none works inside the slot. Anything
- * found outside the group escaped the kill (a new session, a double fork):
- * it is killed too and reported, as is a group member still alive after 3 s.
- * Returns the reports (empty = clean).
+ * After a run closed: SIGKILL its whole process group and every other process
+ * of its session (a descendant in a group of its own: the group kill cannot
+ * reach it), then VERIFY that no process of the run is left and none works
+ * inside the slot. Anything found outside the session escaped the kill (it
+ * started a session of its own): it is killed too and reported, as is a
+ * member still alive after 3 s. Returns the reports (empty = clean).
  */
 async function sweep(pgid: number, h: Hygiene): Promise<string[]> {
   const orphans = new Map<number, string>();
@@ -942,7 +1041,10 @@ async function sweep(pgid: number, h: Hygiene): Promise<string[]> {
     }
     const found = scanProcesses(new Set([pgid]), [h]);
     for (const p of found) {
-      if (p.pgid === pgid) continue;
+      if (p.member) {
+        if (p.pgid !== pgid) killQuietly(p.pid);
+        continue;
+      }
       if (!orphans.has(p.pid)) orphans.set(p.pid, `pid ${p.pid} (${cmdline(p.pid)}): ${p.why}`);
       killQuietly(p.pid);
     }
@@ -961,8 +1063,9 @@ async function sweep(pgid: number, h: Hygiene): Promise<string[]> {
 }
 
 /**
- * Synchronous (it runs from an `exit` handler): SIGKILL every process in one
- * of `pgids` or working in a slot, then wait up to 3 s for them to die.
+ * Synchronous (it runs from an `exit` handler): SIGKILL every process of one
+ * of the runs `pgids` names (group or session) or working in a slot, then
+ * wait up to 3 s for them to die.
  * Returns the ones still alive.
  */
 function finalSweep(pgids: Set<number>, hs: Hygiene[]): string[] {
@@ -986,13 +1089,21 @@ function finalSweep(pgids: Set<number>, hs: Hygiene[]): string[] {
   }
 }
 
+/** A process's command line, for a report: /proc, else `ps` (macOS); "?" when neither has it. */
 function cmdline(pid: number): string {
+  let c = "";
   try {
-    const c = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim();
-    return c.length > 80 ? `${c.slice(0, 77)}...` : c;
+    c = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim();
   } catch {
-    return "?";
+    try {
+      const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+      c = `${r.stdout ?? ""}`.trim();
+    } catch {
+      // no ps
+    }
   }
+  if (c === "") return "?";
+  return c.length > 80 ? `${c.slice(0, 77)}...` : c;
 }
 
 function run(

@@ -120,6 +120,41 @@ vi.mock("../providers.js", () => ({
 
 import { WebApp } from "../web-app.js";
 
+// ── The browser's WebSocket failure semantics (#1147) ──────────────────
+//
+// This surface runs in a browser, where a socket that cannot connect fires
+// `error` and then `close` (code 1006) — the WHATWG "fail the WebSocket
+// connection" steps, which the sync socket adapter relies on: its `onclose`
+// schedules the reconnect, and its `onerror` does nothing ("onclose will fire
+// after onerror", packages/sync-engine/src/ws-adapter.ts). Node 22's built-in
+// WebSocket (undici 6) breaks that contract: a refused connection fires
+// `error` and then stays CONNECTING forever, never `close` (Node 24 is
+// conformant). Under Node 22 a down→up cell therefore never reconnected on
+// the backoff: it sat until the 15 s push-ack deadline tore the dead socket
+// down — ~15 of the cell's ~21 s were that one real-time wait, and under
+// full-suite load the cell overran its budget.
+//
+// So the surface gets the socket it has in production: Node's own WebSocket,
+// with the one missing step added — an `error` while still CONNECTING is
+// followed by `close` (1006). Where the runtime already closes the socket
+// (Node 24: readyState is CLOSED by the time `error` fires), this adds
+// nothing. Nothing else about the transport changes. Installed per cell, in
+// `beforeEach`, beside the fresh IndexedDB.
+const RuntimeWebSocket = globalThis.WebSocket;
+class BrowserFailureWebSocket extends RuntimeWebSocket {
+  constructor(url: string | URL, protocols?: string | string[]) {
+    super(url, protocols);
+    this.addEventListener("error", () => {
+      if (this.readyState !== RuntimeWebSocket.CONNECTING) return;
+      const close = Object.assign(new Event("close"), {
+        code: 1006,
+        reason: "",
+        wasClean: false,
+      });
+      this.dispatchEvent(close);
+    });
+  }
+}
 // ── Relay harness (as apps/cli relay-sync-socket.test.ts) ──────────────
 
 const MASTER = "test-token";
@@ -200,6 +235,7 @@ let dir: string | null = null;
 beforeEach(() => {
   // A fresh origin per cell: one browser profile, one identity.
   vi.stubGlobal("indexedDB", new IDBFactory());
+  vi.stubGlobal("WebSocket", BrowserFailureWebSocket);
   localStorage.clear();
   keyState.broken = false;
 });

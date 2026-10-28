@@ -10,6 +10,7 @@
 // pluggable; the planning engine must not bind to a specific provider.
 
 import type { IntelligenceProvider } from "@motebit/sdk";
+import { pickerModelForTier } from "@motebit/sdk";
 
 // === Task Types ===
 
@@ -142,10 +143,11 @@ export function resolveModelTier(tier: ModelTier, currentModel: string): string 
   // Detect provider family from current model
   if (currentModel.includes("claude") || currentModel.includes("anthropic")) {
     switch (tier) {
+      // The picker's rows: one table for what every surface offers and
+      // what a tier resolves to.
       case "strongest":
-        return "claude-opus-5";
       case "fast":
-        return "claude-haiku-4-5";
+        return pickerModelForTier(tier);
     }
   }
 

@@ -126,8 +126,9 @@ export const BYOK_MODEL_CATALOG = {
       host: "anthropic",
       lab: "anthropic",
       jurisdiction: "US",
-      inputCostPerMillion: 1.0,
-      outputCostPerMillion: 5.0,
+      // Claude Haiku 5.5 list price, prompts up to 100k tokens.
+      inputCostPerMillion: 0.1,
+      outputCostPerMillion: 0.5,
     },
   ],
   openai: [

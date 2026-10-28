@@ -398,27 +398,6 @@ export function assertNotFrozen(db: DatabaseDriver): void {
   if (isFrozenNow(db)) throw new EmergencyFrozenError();
 }
 
-/**
- * The expiry floor below which a claimed-but-unsettled task entry may be
- * deleted (`TaskQueue.cleanup` / `evict`). Normally `now - holdMs`. While
- * frozen no such claim may go — the freeze is what keeps it unsettled — and
- * for `holdMs` after an unfreeze every claim is held, so the recovery pass
- * gets the same hold a claim would have had without the freeze.
- */
-export function claimHoldFloor(db: DatabaseDriver, now: number, holdMs: number): number {
-  try {
-    const row = db
-      .prepare("SELECT value, updated_at FROM relay_config WHERE key = 'freeze_state'")
-      .get() as { value: string; updated_at: number } | undefined;
-    if (row == null) return now - holdMs;
-    const frozen = (JSON.parse(row.value) as { frozen?: unknown }).frozen === true;
-    if (frozen || row.updated_at >= now - holdMs) return Number.MIN_SAFE_INTEGER;
-  } catch {
-    // No relay_config (a bare TaskQueue): the plain hold.
-  }
-  return now - holdMs;
-}
-
 /** The names of the freeze guards installed on this connection. */
 export function installedFreezeGuards(db: DatabaseDriver): string[] {
   return (

@@ -180,6 +180,11 @@ const EXACT_COMMANDS = new Set([
   "wc -l",
   "tr -d ' '",
   "head -n 1",
+  // The machine-wide verification lock (#1147): the hook re-runs ITSELF,
+  // unchanged, under scripts/lib/verify-lock.ts, so it adds no phase and runs
+  // nothing CI does not. Guarded by the re-entry variable it sets.
+  '[ -z "$MOTEBIT_VERIFY_LOCK_PID" ]',
+  'exec tsx scripts/with-verify-lock.ts pre-push -- sh -e .husky/pre-push "$@"',
 ]);
 
 /** The hook's top level: the $CI short-circuit, then `if <tag guard>; then <body> fi`. */
@@ -1151,10 +1156,12 @@ export const CI_EXPRESSION_ALLOWLIST: Record<string, string> = {
   "github.workflow": "concurrency.group",
   "github.ref": "concurrency.group",
   "github.event_name":
-    "job if: of gate-effectiveness-shard, gate-self-tests, activation-effectiveness, github-action-smoke, sibling-audit, changeset; changes filter run; env EVENT (gate-effectiveness), DIFF_BASE (github-action-smoke, sibling-audit), CHANGESET_BASE_REF",
-  "github.base_ref": "changes filter run; github-action-smoke env DIFF_BASE",
+    "job if: of gate-effectiveness-shard, gate-self-tests, activation-effectiveness, github-action-smoke, sibling-audit, changeset; changes filter run; env EVENT (gate-effectiveness), DIFF_BASE (github-action-smoke, desktop-rust, sibling-audit), CHANGESET_BASE_REF",
+  "github.base_ref": "changes filter run; env DIFF_BASE (github-action-smoke, desktop-rust)",
   "github.event.merge_group.base_sha":
-    "changes filter run; env DIFF_BASE (github-action-smoke, sibling-audit), CHANGESET_BASE_REF",
+    "changes filter run; env DIFF_BASE (github-action-smoke, desktop-rust, sibling-audit), CHANGESET_BASE_REF",
+  // A commit SHA (the push's previous tip), not a credential.
+  "github.event.before": "desktop-rust env DIFF_BASE (the push-to-main diff base)",
   "matrix.shard": "test-coverage + gate-effectiveness-shard step run",
   "strategy.job-index": "test-coverage + gate-effectiveness-shard upload `with.name`",
   "runner.temp": "github-action-smoke `with.path`",
@@ -1168,7 +1175,7 @@ export const CI_EXPRESSION_ALLOWLIST: Record<string, string> = {
   "needs.gate-self-tests.result": "gate-effectiveness env SELF_TESTS",
   "steps.filter.outputs.scripts": "changes job `outputs.scripts`",
   "steps.filter.outputs.relay": "changes job `outputs.relay`",
-  "steps.scope.outputs.run": "github-action-smoke step if:",
+  "steps.scope.outputs.run": "github-action-smoke + desktop-rust step if:",
   "steps.decide.outputs.required": "gate-effectiveness step if:",
   "steps.gen.outputs.motebit_id": "github-action-smoke env WANT_ID",
   "steps.gen.outputs.public_key": "github-action-smoke env WANT_PK",
@@ -1183,7 +1190,10 @@ export const CI_EXPRESSION_FUNCTIONS: Record<string, string> = {
     "if: of the check + gate-effectiveness jobs; steps of check-static, test-coverage, python-conformance, python-receipt-verifier-conformance",
   success: "steps of python-conformance, python-receipt-verifier-conformance",
   failure: "e2e screenshot-upload step",
-  format: "github-action-smoke env DIFF_BASE (`format('origin/{0}', github.base_ref)`)",
+  format:
+    "env DIFF_BASE of github-action-smoke + desktop-rust (`format('origin/{0}', github.base_ref)`)",
+  // A hash of files in the checkout (the cargo cache key); reads no context.
+  hashfiles: "desktop-rust cache `with.key` (`hashFiles('apps/desktop/src-tauri/Cargo.lock')`)",
 };
 
 /**

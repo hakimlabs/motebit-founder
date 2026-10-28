@@ -595,10 +595,11 @@ export function modelSupportsExtendedThinking(model: string): boolean {
  * motebit.com incident — see ResolvedTaskConfig); this guard makes the
  * illegal request unrepresentable at the body build itself, whatever any
  * caller configured. Sonnet 5 is included: it rejects NON-default values,
- * and omitting is the only always-valid shape.
+ * and omitting is the only always-valid shape. So is Haiku 5.5 (non-default
+ * sampling values and `budget_tokens` both 400), unlike Haiku 4.5.
  */
 export function modelRejectsSamplingParams(model: string): boolean {
-  return /claude-(?:opus-(?:4-[7-9]|[5-9]\b|\d\d)|sonnet-(?:[5-9]\b|\d\d)|fable|mythos)/i.test(
+  return /claude-(?:opus-(?:4-[7-9]|[5-9]\b|\d\d)|(?:sonnet|haiku)-(?:[5-9]\b|\d\d)|fable|mythos)/i.test(
     model,
   );
 }
@@ -670,20 +671,48 @@ export function actionsToStateUpdates(actions: string[]): Partial<MotebitState> 
 }
 
 export function stripTags(text: string): string {
-  return text
-    .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
-    .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
-    .replace(/<state\s+[^>]*\/>/g, "")
-    .replace(/<narration\s*>[\s\S]*?<\/narration\s*>/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
-    .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
-    .replace(/\[\/EXTERNAL_DATA\]/g, "")
-    .replace(/\[MEMORY_DATA\]/g, "")
-    .replace(/\[\/MEMORY_DATA\]/g, "")
-    .replace(/\*[^*]+\*/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s{2,}/g, " ")
+  return (
+    text
+      .replace(/<memory\s+[^>]*>[\s\S]*?<\/memory>/g, "")
+      .replace(/<thinking>[\s\S]*?<\/thinking>/g, "")
+      .replace(/<state\s+[^>]*\/>/g, "")
+      .replace(/<narration\s*>[\s\S]*?<\/narration\s*>/g, "")
+      .replace(/\[EXTERNAL_DATA[^\]]*\][\s\S]*?\[\/EXTERNAL_DATA\]/g, "")
+      .replace(/\[MEMORY_DATA\][\s\S]*?\[\/MEMORY_DATA\]/g, "")
+      .replace(/\[EXTERNAL_DATA[^\]]*\]/g, "")
+      .replace(/\[\/EXTERNAL_DATA\]/g, "")
+      .replace(/\[MEMORY_DATA\]/g, "")
+      .replace(/\[\/MEMORY_DATA\]/g, "")
+      // Markdown survives: `**bold**`, `*italic*`, lists, indentation and code
+      // blocks are the answer, not noise. This used to delete every `*…*` span
+      // (a leftover from creature `*action*` syntax, which the system prompt now
+      // forbids in favour of <state> tags) and collapse every whitespace run to
+      // one space, so bold key terms vanished and lists and code flattened —
+      // the intelligence-parity bench (#1076) scored the same request 4.2 through
+      // motebit vs 7.7 direct. Only blank-line runs, and the space runs a removed
+      // tag leaves inside a line, are squeezed; leading indentation is kept.
+      .replace(/(\S)[ \t]{2,}/g, "$1 ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
+}
+
+/**
+ * The spoken form of a reply: {@link stripTags}, then Markdown markup dropped
+ * with its words kept — `**SYN**` is spoken "SYN", a heading's `#`, list
+ * bullets and code ticks are not read aloud. Text surfaces keep the Markdown
+ * (#1076); speech has no use for the marks.
+ */
+export function stripForSpeech(text: string): string {
+  return stripTags(text)
+    .replace(/```[a-zA-Z0-9_-]*\n?/g, "")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/\*/g, "")
     .trim();
 }
 
@@ -783,9 +812,8 @@ export function getImpulsesForAction(
  *   - `[MEMORY_DATA]…[/MEMORY_DATA]`       — recalled-memory boundaries
  *   - Any of the above in partial/unclosed form (streaming mid-tag)
  *
- * Does NOT strip the `*action*` asterisk pattern used in creature action
- * syntax — that is a plain-text-surface concern composed on top of this
- * function (see {@link stripPartialActionTag}).
+ * Asterisks are content (Markdown emphasis), never stripped here or in
+ * {@link stripPartialActionTag}.
  *
  * Before this primitive was centralized, `apps/web/src/ui/chat.ts` had
  * its own copy of the full set while desktop's `stripPartialActionTag`
@@ -812,18 +840,17 @@ export function stripInternalTags(text: string): string {
 }
 
 /**
- * Strip internal tags plus the creature's `*action*` asterisk syntax and
- * normalize whitespace. Used by plain-text chat surfaces (desktop) that
- * render `bubble.textContent` directly — markdown surfaces (web) use
- * `stripInternalTags` alone because their `*italic*` asterisks are
- * rendered by the markdown pass, not stripped.
+ * Strip internal tags and squeeze blank-line runs, for plain-text chat
+ * surfaces (desktop, mobile) that render `textContent` directly. Markdown
+ * asterisks and whitespace are kept: they carry the answer's emphasis and
+ * structure (#1076).
  */
 export function stripPartialActionTag(text: string): string {
+  // Asterisks and whitespace are content (see `stripTags`): only internal tags
+  // go, and blank-line runs are squeezed.
   return stripInternalTags(text)
-    .replace(/\*[^*]+\*/g, "")
-    .replace(/\*[^*]*$/, "")
+    .replace(/(\S)[ \t]{2,}/g, "$1 ")
     .replace(/\n{3,}/g, "\n\n")
-    .replace(/\s{2,}/g, " ")
     .trim();
 }
 

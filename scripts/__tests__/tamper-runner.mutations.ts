@@ -16,8 +16,13 @@
  * causation law (the second edited run, the middle unedited run, the group
  * kill, the survivor check, same test, same error class, no-op entries, the
  * group-wide flake veto; G10-G16 the error class of a timeout and the load
- * proof). Every entry must print RED (ok).
+ * proof); H1-H5 the run's session (#1160: a descendant in a process group
+ * of its own is still the run's; the report names the process; startup
+ * reaping works without /proc). H3-H5 remove code only a platform without
+ * /proc reaches, so they are listed only there. Every entry must print RED
+ * (ok).
  */
+import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,6 +40,8 @@ const CAUSATION = { test: "scripts/__tests__/tamper-runner.causation.test.ts" };
 
 const edit = (from: string, to: string) => ({ file: RUNNER, from, to });
 const NEVER = "if (false as boolean) {";
+const SETPGID_CELL =
+  "tamper-runner causation C1: a process a run leaves in a process group of its own but inside the run's session (setpgid) is the run's: never an orphan, and it dies with its run";
 
 const MUTATIONS: TamperEntry[] = [
   // --- the eight a8b2a8e's self-test missed
@@ -573,6 +580,56 @@ const MUTATIONS: TamperEntry[] = [
     red: "tamper-runner causation a RED's edited runs never carry the load sentinel (only a GREEN's second edited run does)",
     edits: [edit('validity, c1.verdict === "GREEN");', "validity, true);")],
   },
+  // --- the run's session (#1160)
+  {
+    name: "H1 a process in the run's session but another process group is not the run's",
+    ...CAUSATION,
+    red: SETPGID_CELL,
+    edits: [
+      edit(
+        "  return ids.has(pgid) || (sid != null && ids.has(sid));",
+        "  return ids.has(pgid) || (sid != null && (false as boolean));",
+      ),
+    ],
+  },
+  {
+    name: "H2 the sweep leaves a member outside the run's process group alive",
+    ...CAUSATION,
+    red: SETPGID_CELL,
+    edits: [edit("        if (p.pgid !== pgid) killQuietly(p.pid);", "        void pgid;")],
+  },
+  ...(existsSync("/proc/self/stat")
+    ? []
+    : [
+        {
+          name: "H3 (no /proc) a report's command line is never read from ps",
+          ...CAUSATION,
+          red: "tamper-runner causation C1: a process that escapes its run's process group (own session) is an orphan: the run is not green, and it is killed",
+          edits: [edit('      c = `${r.stdout ?? ""}`.trim();', "      void r;")],
+        },
+        {
+          name: "H4 (no /proc) no session ids: the group alone",
+          ...CAUSATION,
+          red: SETPGID_CELL,
+          edits: [
+            edit(
+              '  if (process.platform !== "darwin" || pids.length === 0) return out;',
+              '  if (process.platform !== "darwin" || pids.length >= 0) return out;',
+            ),
+          ],
+        },
+        {
+          name: "H5 (no /proc) startup reaping proves no leftover group (no cwd read from lsof)",
+          ...LIFECYCLE,
+          red: "tamper-runner lifecycle P-e: startup kills the process group a SIGKILLed run left running, then removes its copy",
+          edits: [
+            edit(
+              '        else if (line.startsWith("n") && inBase(line.slice(1))) {',
+              '        else if (line.startsWith("n") && (false as boolean)) {',
+            ),
+          ],
+        },
+      ]),
 ];
 
 // Every self-test is independent (each builds its own fixture), so each
