@@ -48,12 +48,13 @@ Order: A → B → C → D → E. F has the same priority as B and starts when B
 - The ruleset requires the merge queue ([`merge-queue.md`](merge-queue.md)), has an empty bypass list, requires code-owner review, and dismisses stale reviews on push.
 - Identities ([`agent-identity-boundary.md`](agent-identity-boundary.md)):
   - `motebit-agent` publishes PRs.
-  - `motebit-reviewer` is the machine reviewer. It has Write access and 2FA, and its token has the scopes `public_repo` and `read:org`. Only the founder holds that token.
+  - `motebit-reviewer` is the machine reviewer. It has Write access and 2FA. Its only token (scopes `public_repo`, `read:org`, held only by the founder) was deleted on 2026-10-28 for matrix row R1, so the reviewer holds no credential today. Issuing a new one is a founder decision.
   - The founder (`hakimlabs`) is the code owner.
 - Verdict rules:
   - A founder approval counts only on the PR's current head.
-  - A machine approval binds on any commit and for good, which only ever narrows what passes.
-  - Separately, GitHub's stale-review dismissal removes an approval from GitHub's own required-approval count when a new commit is pushed.
+  - A machine approval binds on any commit for as long as GitHub reports its state as `APPROVED`, which only ever narrows what passes.
+  - A dismissal ends it. GitHub rewrites a dismissed review's state to `DISMISSED`, whether a person dismissed it or a push did (`dismiss_stale_reviews_on_push`). So the verdict no longer sees that approval (matrix M6). The script's comments still say the approval binds "for good"; correcting them is the next task.
+  - Separately, a dismissed approval no longer counts toward GitHub's own required approval.
 
 **Evidence.**
 
@@ -72,8 +73,9 @@ Order: A → B → C → D → E. F has the same priority as B and starts when B
 | Withdrawing the founder approval re-blocks a PR                                                                    | operationally demonstrated | #1181: review 5663895514 dismissed; run 40485811871 (`pull_request_review`) FAIL `kill-switch-machine-only`; BLOCKED. Informal: before contract, not the matrix test                                                                                    |
 | C1: on the contract PR only `pull_request_target` reports, with policy from main                                   | operationally demonstrated | #1184: runs 40487025318, 40492777381; check 122131268246 (app 15368) on `3101d2f6f`; policy `8a1406809`, `policy_on_main: true`; PASS `no-machine-approval`                                                                                             |
 | The contract PR's queue run judged the founder approval on the exact head                                          | operationally demonstrated | run 40500847926 on queue commit `6e73f089e`; policy `8a1406809` (queue base); evaluated head `3101d2f6f`; review snapshot: `hakimlabs` APPROVED `3101d2f6f`; PASS `founder-approved`. The expand script ran, so the switch was logged `off` and ignored |
-| A T0 change merges on a machine-only approval with the switch on                                                   | none yet                   | matrix M3                                                                                                                                                                                                                                               |
-| Revocation (credential, approval, authority) is effective                                                          | none yet                   | matrix M5–M7, R1–R3                                                                                                                                                                                                                                     |
+| A T0 change merges on a machine-only approval with the switch on                                                   | operationally demonstrated | matrix M3: #1189 merged as `65bc577cb`, reverted by #1192 as `80419ae49`                                                                                                                                                                                |
+| Revocation (credential, approval, authority) is effective                                                          | operationally demonstrated | matrix R1, R2, R3 and M7 (results below)                                                                                                                                                                                                                |
+| The first contract-phase read of the switch                                                                        | operationally demonstrated | run 40505144538 (`pull_request_target`, this ledger's PR #1185, head `09d4977fe`); policy `6e73f089e`, `policy_on_main: true`; `AUTONOMY_T0` read `off`; PASS `no-machine-approval`                                                                     |
 
 **Acceptance: the contract-phase live matrix.** Its precondition, #1184 on main, is met. Only the founder changes the switch, enqueues, or uses the reviewer token. Each row records:
 
@@ -98,9 +100,54 @@ Supersedes the provisional list in #1184's description.
 | R3 (authority)      | T0 PR approved by the machine while the switch was `on`; the founder sets it `off`; queued              | a fresh `merge_group` run FAILs `kill-switch-machine-only`; the historical approval carries no authority                     |
 | End                 |                                                                                                         | switch `off` until #1163 merges and the founder decides                                                                      |
 
-**GO/NO-GO.** NO-GO for standing T0 autonomy. `AUTONOMY_T0` stays `off` until every row passes.
+The Expected column is as written before the run. Two expectations (M6 and M7) were wrong about GitHub's behavior; the results below record what GitHub actually does.
 
-**Next.** Run the matrix; then revise and merge #1163 (the design proposal), which closes A.
+**Results (2026-10-27 to 2026-10-28).**
+
+Setup:
+
+- Throwaway PRs: A1 #1188 (T1), A2 #1191 (T1), B1 #1189 (T0), B2 #1190 (T0).
+- Policy `6e73f089e` until M3 merged, `65bc577cb` after it. Every run's provenance had `policy_sha` = `expected_policy_sha`.
+- When each PR was opened, its `pull_request_target` run (40574307990, 40574317124, 40574324587, 40633978936) gave PASS `no-machine-approval`.
+
+| Test | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M5   | **Pass.** #1188, reviewer approval 5674591596, switch `off`. Run 40586743264 (`merge_group`, queue `a8f427ecb`, head `55f8dfcca`): FAIL `machine-approved-t1`; left the queue. The earlier PR-level pass did not help.                                                                                                                                                                                                                                                                                                                |
+| M1   | **Pass.** #1188, description edited. Run 40586991404 (`pull_request_target`): FAIL `machine-approved-t1`.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| M2   | **Pass.** #1189, reviewer approval 5677783283, switch `off`. Run 40632378793 (`merge_group`, queue `b1aeb2c09`): FAIL `kill-switch-machine-only`; left the queue.                                                                                                                                                                                                                                                                                                                                                                     |
+| R2   | **Pass.** #1189, founder approval 5677830155, then dismissed by the founder. Run 40633257447 (`merge_group`, queue `985dc8ba8`): FAIL `kill-switch-machine-only`; left the queue.                                                                                                                                                                                                                                                                                                                                                     |
+| M6   | **Pass on safety; expectation corrected.** A push to #1189 (`36c77a57d`) made GitHub dismiss both approvals, and the PR became `REVIEW_REQUIRED`. Run 40633462122 then gave PASS `no-machine-approval`, not the expected FAIL. A dismissed approval's state becomes `DISMISSED`, so the verdict no longer counts it. Nothing could be queued without a fresh approval.                                                                                                                                                                |
+| M4   | **Pass.** Switch `on`. #1191, reviewer approval. Run 40636640909 (`merge_group`, queue `fe78ab1d0`), switch read `on`: FAIL `machine-approved-t1`. The switch does not help T1.                                                                                                                                                                                                                                                                                                                                                       |
+| M3   | **Pass.** Switch `on`. #1189 got a fresh reviewer approval (5678062663) on `36c77a57d`. Run 40633462122 was re-run (attempt 2: PASS `t0`). Run 40636900322 (`merge_group`, queue `65bc577cb`), switch read `on`: PASS `t0`. **Merged 2026-10-28T05:38:52Z as `65bc577cb`**, all 8 required checks green. This is the only intended merge.                                                                                                                                                                                             |
+| M7   | **Pass on safety; expectation corrected.** The founder removed the reviewer's access. On this public repository the reviewer could still submit an approval (5678341409 on #1191, author association `NONE`), so the expectation "no approval can be recorded" was wrong. It did not count: #1190 and #1191 showed `REVIEW_REQUIRED`, and nothing merged. Access was restored (invitation 340097787). **Restoring access made every one of the reviewer's earlier approvals count again, including the one submitted while removed.** |
+| R3   | **Pass.** Switch set `off`. #1190, reviewer approval 5678217450, given while the switch was `on`. Run 40640204756 (`merge_group`, queue `809d11010`, policy `65bc577cb`): FAIL `kill-switch-machine-only`; left the queue. The historical approval carried no authority.                                                                                                                                                                                                                                                              |
+| R1   | **Pass.** The founder deleted the reviewer's only token (classic `motebit-reviewer-pr`). The founder then ran `gh api user` with the stored token and GitHub answered `401 Bad credentials` (2026-10-28).                                                                                                                                                                                                                                                                                                                             |
+| End  | M3 reverted by #1192 (T0, founder-approved): run 40646812690 (`merge_group`, queue `80419ae49`), switch read `off`: PASS `founder-approved`. **Merged 2026-10-28T07:15:24Z as `80419ae49`.** `docs/parity-inventory.md` is identical to `6e73f089e`. The switch is `off`.                                                                                                                                                                                                                                                             |
+
+**Findings.**
+
+1. **A dismissal ends a machine approval (M6).** The verdict script's claim that a machine approval binds "for good" is false: once GitHub rewrites a dismissed review's state, the verdict no longer counts that approval. This is not an authorization hole. A merge still needs an approval GitHub counts, and any such approval is visible to the verdict as `APPROVED`. The claim and the script comments are corrected in a reviewed PR.
+2. **Removing access does not stop a review being submitted (M7).** On a public repository, a reviewer without access can still submit an `APPROVED` review, with author association `NONE`. GitHub does not count it toward the required approval. So "an approval was submitted" is not evidence of authority.
+3. **Restoring access brings old approvals back (M7).** Re-adding a collaborator makes all of their earlier approvals count again, including any submitted while they had no access. **Operating rule:** after restoring a reviewer, dismiss its standing approvals before anything is queued.
+4. **Re-run timestamps.** `gh run rerun` keeps the run's original `createdAt`. Two queue runs (M3, R3) started before the recorder's since-time. Matrix evidence was read from the run logs directly.
+
+**CI noise seen during the matrix (not authorization defects).**
+
+- A test-coverage shard on #1192 hit the job timeout after all of its tests passed. Run 40640231205 was cancelled; the re-run passed.
+- The e2e Playwright install sometimes takes nearly 10 minutes.
+- Runs of the same event on the same PR share a concurrency group, so a push followed by an edit cancels the earlier run. A cancelled run counts as a failure until it is re-run.
+
+**GO/NO-GO.** The matrix passed. Every row denied what it should deny, and the one intended merge (M3) went through. Standing T0 autonomy is still NO-GO:
+
+- `AUTONOMY_T0` stays `off` until #1163 merges and the founder decides.
+- The reviewer has no credential.
+- Any future restore of reviewer access follows finding 3.
+
+**Next.**
+
+1. The founder closes the throwaways #1188, #1190 and #1191.
+2. A reviewed PR corrects the "binds for good" comments in `scripts/autonomy-tier-verdict.ts` (finding 1).
+3. Revise and merge #1163 (the design proposal), which closes A.
 
 ## B–F
 
