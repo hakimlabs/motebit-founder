@@ -38,6 +38,14 @@ The recurring asks across NIST documents (SP 800-63-4, SP 800-207, NIST IR 8587,
 
 **Aligned with.** W3C DID 1.0 (`did:key` derivation), W3C VC 2.0 (`eddsa-jcs-2022` suite). **Not claimed: an SP 800-63-4 assurance level.** SP 800-63-4 explicitly leaves machine-to-machine authentication out of scope, so no AAL applies to an agent's key. An earlier revision of this section called motebit "AAL2-characteristic"; that borrowed a scale NIST defines for people, and is withdrawn. Hardware-backed key storage, where available, is reported as hardware attestation (category 5), not as an assurance level.
 
+**Two subjects, one link.** Motebit separates who authenticates from who acts, the distinction NIST's first two design tenets draw:
+
+- **The human or organizational principal** authenticates: unlocking its key, approving an action, signing a delegation. SP 800-63-4 does apply here, and the principal's authenticator (passphrase, Secure Enclave key, a passkey on the consent-root device) is the thing an AAL assessment would examine. That assessment has not been done.
+- **The agent** acts under its own Ed25519 identity, a distinct credential with its own lifecycle that never authenticates as the person. Its credential practice is a workload question (NIST IR 8587 §5.3.1.6, category 2).
+- **The signed delegation** links them: the principal's signature hands bounded, expiring, revocable authority to the named agent key. NIST's comment summary names signed mandates and multi-hop delegation and revocation as having no mature standard yet. That link is what motebit's delegation primitives implement.
+
+An agent acts for a person without authenticating as that person.
+
 ### 2. Cryptographic delegation chains with cascade revocation
 
 **Ask.** When a principal authorizes an agent to act, and that agent sub-delegates to other agents, the full chain must be verifiable and revocation must cascade.
