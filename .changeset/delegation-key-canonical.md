@@ -1,0 +1,7 @@
+---
+"@motebit/crypto": patch
+---
+
+Delegation-family keys verify only in their canonical spelling (64 lowercase hex, the pattern the committed `standing-delegation-v1` / `delegation-token-v1` / `delegation-revocation-v1` JSON Schemas already declare). `findGrantRevocation` binds a revocation to a grant by exact `delegator_public_key` equality, but the verifiers decoded keys leniently (`"AB"` ≡ `"ab"`, `"0g"` ≡ `"00"`), so a revocation the delegator signed with another spelling of its key verified yet bound nothing, and a grant spelled in uppercase verified yet could not be revoked by the delegator's canonical revocation — `verifyDelegationTokenVerdict` reported `revocation: fresh` and `isFullyVerified: true`, and the runtime's `verifyGrantForTurn` returned a verified grant, for a revoked grant. Now `verifyDelegation` and `verifyStandingDelegation` reject a non-canonical delegator or delegate key, `verifyDelegationRevocation` rejects a non-canonical delegator key, and `signDelegationRevocation` throws on one rather than emit a revocation every verifier rejects.
+
+Stricter verification: a delegation artifact whose key is uppercase, mixed-case or non-hex no longer verifies. Every motebit producer already emits lowercase (`bytesToHex`) and the wire schemas already refuse other spellings, so no conforming artifact is affected. The relay's comparison of a revocation's key against the keys it holds for the delegator stays case-insensitive (legacy device rows); only the artifact's own key must be canonical.

@@ -312,9 +312,13 @@ export async function bindByDelegationRevocation(
     ok = false;
   }
   if (!ok) return { refused: "delegation_revocation:signature_invalid" };
-  // Case-insensitive: a legacy device row may store UPPER(K) (#758 —
-  // device-registration-guard.ts admits it), and both spellings name the same
-  // 32 bytes the signature just verified under. Same rule as didKeyProvenFor.
+  // Case-insensitive on the HELD side only: a legacy device row may store
+  // UPPER(K) (#758 — device-registration-guard.ts admits it), and both
+  // spellings name the same 32 bytes the signature just verified under. Same
+  // rule as didKeyProvenFor. The ARTIFACT's key is already canonical (64
+  // lowercase hex): `verifyDelegationRevocation` rejects any other spelling,
+  // because consumers bind a revocation to a grant by exact key equality.
+  // The lowercase below is therefore a no-op kept for the held-side compare.
   const signer =
     typeof revocation.delegator_public_key === "string"
       ? revocation.delegator_public_key.toLowerCase()
