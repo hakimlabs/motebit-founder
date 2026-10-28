@@ -120,3 +120,4 @@ The optional brand (C3, `protocol/src/index.ts:19`) means `const id: MotebitId =
 Never weaken the check to pass — fix the divergence (`feedback_coverage_thresholds`-shaped). See `architecture_synchronization_invariants`, `feedback_legibility_ratio`.
 
 <!-- autonomy-tier live matrix (T0, B1): merged on purpose by test M3, reverted by the next PR -->
+<!-- autonomy-tier live matrix (T0, B1): second commit for row M6 (stale approval) -->
