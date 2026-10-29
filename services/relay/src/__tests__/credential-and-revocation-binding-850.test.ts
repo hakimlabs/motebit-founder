@@ -20,14 +20,17 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   bytesToHex,
+  canonicalJson,
   deriveSovereignMotebitId,
   generateKeypair,
   hexPublicKeyToDidKey,
   mintAudienceToken,
   signDelegationRevocation,
   signDeviceRegistration,
+  signBySuite,
   signKeySuccession,
   signVerifiableCredential,
+  toBase64Url,
   type DelegationRevocation,
   type KeyPair,
   type VerifiableCredential,
@@ -636,6 +639,39 @@ describe("a delegation revocation binds to a key the relay holds for its delegat
       200,
     );
     expect((await submitTaskUnderGrant(legacy, grantId)).status).toBe(403);
+  });
+
+  it("a revocation whose OWN key is spelled UPPER-case is not a statement this relay binds or caches", async () => {
+    // The artifact's key must be canonical (64 lowercase hex — the wire
+    // schema's pattern): consumers bind a revocation to a grant by EXACT key
+    // equality, so an UPPER-case artifact the relay cached would be served as
+    // a revocation that revokes nothing. Case-insensitivity applies only to
+    // the keys the relay HOLDS (the legacy device row above), never to the
+    // artifact. Hand-signed: signDelegationRevocation refuses this spelling.
+    const delegator = await identity();
+    const grantId = `grant-${crypto.randomUUID()}`;
+    const body = {
+      grant_id: grantId,
+      delegator_id: delegator.mid,
+      delegator_public_key: delegator.hex.toUpperCase(),
+      revoked_at: Date.now(),
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+    };
+    const sig = await signBySuite(
+      body.suite,
+      new TextEncoder().encode(canonicalJson(body)),
+      delegator.kp.privateKey,
+    );
+    const upper: DelegationRevocation = { ...body, signature: toBase64Url(sig) };
+
+    // The binder (the seam every ingestion path goes through) refuses it.
+    expect(await bindByDelegationRevocation(relay.moteDb.db, upper)).toEqual({
+      refused: "delegation_revocation:signature_invalid",
+    });
+    // The route refuses it before any key match: the wire schema's
+    // `^[0-9a-f]{64}$` makes it a malformed body (400), and nothing is cached.
+    expect((await postRevocation(upper)).status).toBe(400);
+    expect(cached(grantId)).toBe(false);
   });
 
   it("a tampered revocation is still 422 (not a signed statement)", async () => {

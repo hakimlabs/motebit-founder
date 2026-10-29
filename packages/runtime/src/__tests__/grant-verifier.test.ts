@@ -15,6 +15,9 @@ import {
   signDelegation,
   signStandingDelegation,
   signDelegationRevocation,
+  signBySuite,
+  canonicalJson,
+  toBase64Url,
 } from "@motebit/crypto";
 import type { DelegationToken, StandingDelegation } from "@motebit/protocol";
 import { verifyGrantForTurn as verifyGrantForTurnAs } from "../grant-verifier.js";
@@ -124,6 +127,76 @@ describe("verifyGrantForTurn", () => {
     );
 
     expect(await verifyGrantForTurn(token, grant, [forged])).not.toBeNull();
+  });
+
+  it("returns null for a grant whose delegator key is spelled in UPPERCASE, revoked by the delegator's canonical revocation", async () => {
+    // Before the canonical-key rule, an uppercase-key grant VERIFIED (lenient
+    // hex decode) and `grantDelegatorIs` matched it case-insensitively, but
+    // `findGrantRevocation` compared the keys exactly — so the delegator's own
+    // canonical revocation bound nothing and the revoked grant conferred money
+    // authority. A non-canonical grant now fails verification outright.
+    const alice = await generateKeypair();
+    const bob = await generateKeypair();
+    const now = Date.now();
+    // Hand-signed: the motebit signers refuse a non-canonical key, so this is
+    // what a foreign producer (or a pre-fix grant on disk) could present.
+    const grantBody = {
+      grant_id: "grant-money-1",
+      delegator_id: "did:motebit:alice",
+      delegator_public_key: bytesToHex(alice.publicKey).toUpperCase(),
+      delegate_id: "did:motebit:bob",
+      delegate_public_key: bytesToHex(bob.publicKey),
+      scope: "pay_invoice",
+      subject: "billing:vendor=acme",
+      cadence_ms: 24 * HOUR,
+      issued_at: now,
+      not_before: null,
+      expires_at: now + 90 * 24 * HOUR,
+      max_token_ttl_ms: HOUR,
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+    };
+    const grant: StandingDelegation = {
+      ...grantBody,
+      signature: toBase64Url(
+        await signBySuite(
+          grantBody.suite,
+          new TextEncoder().encode(canonicalJson(grantBody)),
+          alice.privateKey,
+        ),
+      ),
+    };
+    const tickBody = {
+      delegator_id: grant.delegator_id,
+      delegator_public_key: grant.delegator_public_key,
+      delegate_id: grant.delegate_id,
+      delegate_public_key: grant.delegate_public_key,
+      scope: "pay_invoice",
+      issued_at: now,
+      expires_at: now + HOUR,
+      grant_id: grant.grant_id,
+      suite: "motebit-jcs-ed25519-b64-v1" as const,
+    };
+    const token: DelegationToken = {
+      ...tickBody,
+      signature: toBase64Url(
+        await signBySuite(
+          tickBody.suite,
+          new TextEncoder().encode(canonicalJson(tickBody)),
+          alice.privateKey,
+        ),
+      ),
+    };
+    const revocation = await signDelegationRevocation(
+      {
+        grant_id: grant.grant_id,
+        delegator_id: grant.delegator_id,
+        delegator_public_key: bytesToHex(alice.publicKey),
+        revoked_at: now,
+      },
+      alice.privateKey,
+    );
+
+    expect(await verifyGrantForTurn(token, grant, [revocation])).toBeNull();
   });
 
   it("returns null for a tampered grant", async () => {

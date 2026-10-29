@@ -816,6 +816,7 @@ export async function signDelegation(
   delegation: Omit<DelegationToken, "signature" | "suite">,
   delegatorPrivateKey: Uint8Array,
 ): Promise<DelegationToken> {
+  assertCanonicalPartyKeys("signDelegation", delegation);
   const body = { ...delegation, suite: DELEGATION_TOKEN_SUITE };
   const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
@@ -824,12 +825,57 @@ export async function signDelegation(
 }
 
 /**
+ * The ONE canonical spelling of an Ed25519 public key on the delegation-family
+ * wire (`DelegationToken`, `StandingDelegation`, `DelegationRevocation`):
+ * exactly 64 lowercase hex characters — the `^[0-9a-f]{64}$` pattern the
+ * committed JSON Schemas (`spec/schemas/*-v1.json`) and the
+ * standing-delegation-v1 §3.1 / §5.1 field text declare.
+ *
+ * Why the verifiers enforce it and not just the schemas: the binding rules of
+ * this family are STRING comparisons between artifacts (a revocation binds a
+ * grant when `rev.delegator_public_key === grant.delegator_public_key`; a tick
+ * belongs to a grant when its party keys equal the grant's). `hexToBytes` is
+ * lenient — `"AB"` and `"ab"` decode alike, and so do `"0g"` and `"00"` — so
+ * without this check two different strings could each verify under the SAME
+ * key and then fail to compare equal: a revocation the delegator really signed
+ * would verify yet bind nothing, and the revoked grant would still be honoured.
+ * Rejecting every non-canonical key at verify makes that state unrepresentable:
+ * any key that verifies is canonical, so the exact comparison is between
+ * canonical forms.
+ */
+const CANONICAL_PUBLIC_KEY_HEX = /^[0-9a-f]{64}$/;
+
+function isCanonicalPublicKeyHex(key: unknown): key is string {
+  return typeof key === "string" && CANONICAL_PUBLIC_KEY_HEX.test(key);
+}
+
+/**
+ * Producer side of the same rule (spec/standing-delegation-v1 §5: a producer
+ * MUST NOT emit a non-canonical key). A grant or token signed over another
+ * spelling verifies nowhere, so minting one would fail silently downstream —
+ * refuse loudly at the mint instead.
+ */
+function assertCanonicalPartyKeys(
+  signer: string,
+  artifact: { delegator_public_key: string; delegate_public_key: string },
+): void {
+  for (const field of ["delegator_public_key", "delegate_public_key"] as const) {
+    if (!isCanonicalPublicKeyHex(artifact[field])) {
+      throw new Error(`${signer}: ${field} must be canonical (64 lowercase hex)`);
+    }
+  }
+}
+
+/**
  * Verify a delegation token's signature and (optionally) expiration.
  *
  * Rejects fail-closed on:
  *   - missing or unknown `suite` value (anything other than `DELEGATION_TOKEN_SUITE`)
  *   - expired token (unless `options.checkExpiry === false`)
- *   - malformed hex public key or base64url signature
+ *   - a `delegator_public_key` / `delegate_public_key` that is not canonical
+ *     (64 lowercase hex — an uppercase or non-hex spelling is rejected, never
+ *     decoded leniently)
+ *   - malformed base64url signature
  *   - primitive-level verification failure
  *
  * @param delegation - The delegation token to verify
@@ -842,6 +888,14 @@ export async function verifyDelegation(
   options?: { checkExpiry?: boolean; now?: number },
 ): Promise<boolean> {
   if (delegation.suite !== DELEGATION_TOKEN_SUITE) return false;
+  // Both party keys canonical (lowercase 64-hex), so every key comparison made
+  // against a verified token — chain links, token-vs-grant parties — is exact.
+  if (
+    !isCanonicalPublicKeyHex(delegation.delegator_public_key) ||
+    !isCanonicalPublicKeyHex(delegation.delegate_public_key)
+  ) {
+    return false;
+  }
 
   const checkExpiry = options?.checkExpiry ?? true;
   if (checkExpiry) {
@@ -928,6 +982,7 @@ export async function signStandingDelegation(
   grant: Omit<StandingDelegation, "signature" | "suite">,
   delegatorPrivateKey: Uint8Array,
 ): Promise<StandingDelegation> {
+  assertCanonicalPartyKeys("signStandingDelegation", grant);
   const body = { ...grant, suite: DELEGATION_TOKEN_SUITE };
   const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
@@ -946,7 +1001,8 @@ export async function signStandingDelegation(
  * §3.1, item 4) MUST include the revocation check: precompute the revoked set
  * with `findGrantRevocation`, then pass a `(grant_id) => boolean` lookup.
  *
- * Fail-closed on: unknown suite, malformed key/sig, primitive failure, not-yet-
+ * Fail-closed on: unknown suite, a non-canonical key (either party key not 64
+ * lowercase hex), malformed sig, primitive failure, not-yet-
  * active, expired (unless `checkExpiry === false`), and — when wired — revoked.
  *
  * @param options.isRevoked - Injected revocation lookup (the I/O-free seam,
@@ -958,6 +1014,16 @@ export async function verifyStandingDelegation(
   options?: { checkExpiry?: boolean; now?: number; isRevoked?: (grantId: string) => boolean },
 ): Promise<boolean> {
   if (grant.suite !== DELEGATION_TOKEN_SUITE) return false;
+  // Canonical keys only: `findGrantRevocation` binds a revocation to this
+  // grant by exact `delegator_public_key` equality, so a grant spelled in
+  // another case would verify yet be unrevocable by the delegator's canonical
+  // revocation.
+  if (
+    !isCanonicalPublicKeyHex(grant.delegator_public_key) ||
+    !isCanonicalPublicKeyHex(grant.delegate_public_key)
+  ) {
+    return false;
+  }
 
   const now = options?.now ?? Date.now();
   if (grant.not_before != null && now < grant.not_before) return false;
@@ -1076,11 +1142,22 @@ export async function verifyTokenAgainstGrant(
   return { valid: true };
 }
 
-/** Sign a `DelegationRevocation`. Only the grant's delegator may sign one. */
+/**
+ * Sign a `DelegationRevocation`. Only the grant's delegator may sign one.
+ * Throws when `delegator_public_key` is not canonical (64 lowercase hex): such
+ * a revocation would fail `verifyDelegationRevocation` and revoke nothing.
+ */
 export async function signDelegationRevocation(
   revocation: Omit<DelegationRevocation, "signature" | "suite">,
   delegatorPrivateKey: Uint8Array,
 ): Promise<DelegationRevocation> {
+  // Refuse to produce a revocation every verifier rejects: a delegator must
+  // never believe they revoked a grant with an artifact that binds nothing.
+  if (!isCanonicalPublicKeyHex(revocation.delegator_public_key)) {
+    throw new Error(
+      "signDelegationRevocation: delegator_public_key must be canonical (64 lowercase hex) — spell it as the grant does",
+    );
+  }
   const body = { ...revocation, suite: DELEGATION_TOKEN_SUITE };
   const canonical = canonicalJsonForSigning(body);
   const message = new TextEncoder().encode(canonical);
@@ -1090,7 +1167,11 @@ export async function signDelegationRevocation(
 
 /**
  * Verify a `DelegationRevocation`'s signature (against its own
- * `delegator_public_key`). Fail-closed on unknown suite / malformed key+sig.
+ * `delegator_public_key`). Fail-closed on unknown suite / malformed sig / a
+ * `delegator_public_key` that is not canonical (64 lowercase hex). The last
+ * keeps "verifies" and "binds" one statement: a revocation that verifies here
+ * carries the canonical key, so `findGrantRevocation`'s exact comparison with
+ * a (likewise canonical) verified grant's key cannot miss over spelling.
  *
  * NOTE: this proves the revocation is a well-formed signed statement. To accept
  * it as authority over a specific grant, the caller MUST also check that it
@@ -1103,6 +1184,7 @@ export async function verifyDelegationRevocation(
   revocation: DelegationRevocation,
 ): Promise<boolean> {
   if (revocation.suite !== DELEGATION_TOKEN_SUITE) return false;
+  if (!isCanonicalPublicKeyHex(revocation.delegator_public_key)) return false;
   const { signature, ...body } = revocation;
   const canonical = canonicalJson(body);
   const message = new TextEncoder().encode(canonical);
@@ -1127,6 +1209,11 @@ export async function verifyDelegationRevocation(
  * authoritative and is ignored here. Use this to build the `isRevoked` seam for
  * `verifyStandingDelegation` / `verifyTokenAgainstGrant`: precompute the revoked
  * set once, then provide the sync lookup. Pure and offline — no relay contact.
+ *
+ * The key comparison is exact, between canonical forms: `verifyDelegationRevocation`
+ * rejects a non-canonical `delegator_public_key`, and so does
+ * `verifyStandingDelegation` for the grant's — so a grant that verifies and a
+ * revocation that verifies under the same key always spell it identically.
  */
 export async function findGrantRevocation(
   grant: Pick<StandingDelegation, "grant_id" | "delegator_public_key">,

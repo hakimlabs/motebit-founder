@@ -607,13 +607,20 @@ export async function selfIssueGrant(
     }
   }
   const now = Date.now();
+  // The grant must carry the key in its ONE canonical spelling (64 lowercase
+  // hex, standing-delegation-v1 §5): the signer refuses any other, and a grant
+  // over another spelling verifies nowhere. `publicKeyHex` comes verbatim from
+  // the stored identity config, which a legacy or hand-edited file may spell
+  // in uppercase — lowercasing is a pure respelling (same bytes, same key), so
+  // such a config keeps working. A non-hex value still fails loudly at the signer.
+  const keyHex = identity.publicKeyHex.toLowerCase();
   return signStandingDelegation(
     {
       grant_id: `clerk-self-grant:${identity.motebitId}`,
       delegator_id: identity.motebitId,
-      delegator_public_key: identity.publicKeyHex,
+      delegator_public_key: keyHex,
       delegate_id: identity.motebitId,
-      delegate_public_key: identity.publicKeyHex,
+      delegate_public_key: keyHex,
       scope: DELEGATE_TOOL,
       subject: "market:self-funded-delegation",
       cadence_ms: 0, // no minimum firing interval for interactive spend

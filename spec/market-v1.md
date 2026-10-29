@@ -802,14 +802,17 @@ The reference implementations do not persist delegation tokens — they are shor
 4. `signature = Ed25519_Sign(utf8_bytes, delegator_private_key)` — dispatched via `@motebit/crypto` `signBySuite(suite, bytes, key)`.
 5. Encode the 64-byte signature as base64url (RFC 4648 §5, no padding).
 
+A signer MUST NOT emit a token whose `delegator_public_key` or `delegate_public_key` is not 64 lowercase hex (standing-delegation-v1 §5); `@motebit/crypto` `signDelegation` refuses one.
+
 **Verification:**
 
 1. If `suite !== "motebit-jcs-ed25519-b64-v1"`, reject fail-closed. No legacy-no-suite path.
 2. If `expires_at < current_time_ms`, the token is expired. Reject. (A token is still valid at `current_time_ms == expires_at`.) If `not_before` is present and `current_time_ms < not_before`, the token is not yet active. Reject. (Both time checks are skipped under historical chain verification.)
-3. Decode `delegator_public_key` from hex to a 32-byte Ed25519 public key.
-4. Extract `signature` from the token. Decode from base64url to 64 bytes.
-5. Reconstruct canonical JSON from all fields except `signature`.
-6. `valid = verifyBySuite(suite, canonical_json_utf8, signature_bytes, delegator_public_key)`.
+3. If `delegator_public_key` or `delegate_public_key` is not exactly 64 lowercase hex characters (`^[0-9a-f]{64}$`), reject fail-closed — even when the signature would verify under the decoded bytes. Keys in the delegation family have one spelling, and binding rules compare them as strings (standing-delegation-v1 §5, "Keys have one spelling").
+4. Decode `delegator_public_key` from hex to a 32-byte Ed25519 public key.
+5. Extract `signature` from the token. Decode from base64url to 64 bytes.
+6. Reconstruct canonical JSON from all fields except `signature`.
+7. `valid = verifyBySuite(suite, canonical_json_utf8, signature_bytes, delegator_public_key)`.
 
 Implementations MAY disable expiry checking for historical verification (e.g., auditing delegation chains after the fact) — but MUST NOT disable suite verification.
 
