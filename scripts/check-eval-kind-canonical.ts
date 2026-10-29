@@ -5,7 +5,7 @@
  * docs/doctrine/evals-as-attestations.md, promoted 2026-07-08).
  *
  * Closed-registry / structural-lock pattern — same shape as
- * `check-settlement-mode-canonical` (#79) and siblings, with one extra leg:
+ * `check-settlement-mode-canonical` (#100) and siblings, with one extra leg:
  *
  *   1. `EvalKind` (the union in `packages/protocol/src/eval-attestation.ts`)
  *      is the closed vocabulary of measurement FAMILIES a consumer

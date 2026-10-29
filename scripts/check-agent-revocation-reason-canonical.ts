@@ -4,7 +4,7 @@
  * the `AgentRevocationReason` closed registry.
  *
  * Closed-registry / structural-lock pattern — same shape as
- * `check-suite-declared` (#10), `check-audience-canonical` (#46),
+ * `check-suite-declared` (#10), `check-audience-canonical` (#83),
  * `check-artifact-type-canonical` (#85),
  * `check-routing-decision-coverage` (#95),
  * `check-sensitivity-canonical` (#97), `check-event-type-canonical` (#99),

@@ -2,6 +2,8 @@
 
 The cold third-party-adoption audit (PR #183, June 2026) proposed flipping two fail-open defaults in the published verify family to fail-closed. The flip is a breaking major across the pinned verify API. This memo records the decision — **deferred with named triggers, not declined** — so the next audit doesn't re-litigate it from scratch, and so the eventual major ships as a deliberate API reshape rather than a reactive patch.
 
+**Status (2026-10-29).** Trigger #2 fired on 2026-06-19 (see "Fired 2026-06-19" below), so the reshape is no longer deferred. The additive half has shipped: the structured verdict producers sit beside the booleans (§ "Deprecation readiness"). The breaking half has not: both fail-open defaults below are still in the code (`verifyStandingDelegation` checks revocation only when the caller passes `isRevoked`; `verifyReceiptChain` falls back to the embedded key, `keySource: "embedded"`; both in `packages/crypto/src/artifacts.ts`), and removing the booleans is a pending coordinated major. The two remaining fail-open defaults are assigned to milestone C, with their own design and release ([`docs/ops/milestone-ledger.md`](../ops/milestone-ledger.md) § "C–F").
+
 ## The two fail-open defaults
 
 1. **`verifyStandingDelegation` does not check revocation unless the caller injects the seam.** The function ([`packages/crypto/src/artifacts.ts`](../../packages/crypto/src/artifacts.ts)) is I/O-free by contract — it structurally cannot fetch the revocation feed — so revocation is an injected `isRevoked` callback. Omitting it means a revoked grant verifies `true`. The JSDoc is loud about this, but the return type is a bare boolean whose `true` means less than it reads.
@@ -48,7 +50,7 @@ Ship the verify-family reshape when **any one** of the following holds:
 2. **A second external verify consumer onboards** — the coordination cost of the break is lowest before the third consumer exists, and the footgun surface doubles with each consumer.
 3. **Any real-world misread downstream** — an `"embedded"` keySource presented as identity-verified, or an unchecked revocation treated as valid, observed in any consumer. One incident converts the footgun from theoretical to demonstrated and the deferral ends immediately.
 
-Until a trigger fires, the verify family stays as-is: boolean returns, loud JSDoc, honest labels, internal money path fail-closed and gated.
+Until a trigger fired, the verify family stayed as-is: boolean returns, loud JSDoc, honest labels, internal money path fail-closed and gated. Trigger #2 has fired (below); the booleans and their fail-open defaults remain until the coordinated major.
 
 ## The VerificationVerdict arc
 

@@ -41,7 +41,7 @@
  * silent regression at PR-diff time.
  *
  * The shape is the same load-bearing pattern as
- * `check-drop-handlers` (#48) — for each registered per-surface
+ * `check-drop-handlers` (#77) — for each registered per-surface
  * goal-runner file, assert it calls the canonical signing primitive
  * before persisting goal-fire results. Failure to call the
  * primitive is a runtime contract break: persisted goal results

@@ -15,8 +15,8 @@
  * `motebit_id` under the attacker's key. Fixed in commit 077e40c1; this gate
  * locks the fix and the class.
  *
- * This is the #22→#87 relationship one layer up. #22 pins that wire SCHEMAS
- * exist; #87 (`check-wire-schema-usage`) pins they are PARSED at the boundary.
+ * This is the #22→#35 relationship one layer up. #22 pins that wire SCHEMAS
+ * exist; #35 (`check-wire-schema-usage`) pins they are PARSED at the boundary.
  * #107 pins that signature VERIFIERS exist; this gate pins they are CALLED.
  * Schema-parse checks shape; signature-verify checks authenticity — both are
  * required, neither substitutes for the other.

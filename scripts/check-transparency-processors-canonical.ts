@@ -28,7 +28,7 @@
  *      is feature-flag-dormant but legally still a potential processor).
  *
  * Same closed-registry / structural-lock shape as
- * `check-suite-declared` (#10), `check-audience-canonical` (#46),
+ * `check-suite-declared` (#10), `check-audience-canonical` (#83),
  * `check-artifact-type-canonical` (#85), `check-state-export-signed`
  * (#86) — gate asks role questions (is host X disclosed as a
  * processor?), not instance questions.

@@ -42,15 +42,15 @@ Internal cohesion is identity. Not as metaphor. As physics. The force that makes
 
 In the digital domain, internal cohesion is cryptographic identity.
 
-An Ed25519 keypair is generated — crystallized from entropy, as a droplet crystallizes from the phase boundary of Liquescentia. The cohesion is the asymmetric-keypair pattern, not the specific curve; Ed25519 names the current cryptosuite, and a future suite (post-quantum, hybrid) is a registry addition, not a new physics. The private key is the internal binding force. It is the molecular bond that holds the droplet together. It never leaves the interior. It cannot be extracted without destroying the identity, as extracting the cohesive force from a droplet would destroy the droplet.
+An Ed25519 keypair is generated — crystallized from entropy, as a droplet crystallizes from the phase boundary of Liquescentia. The cohesion is the asymmetric-keypair pattern, not the specific curve; Ed25519 names the current cryptosuite, and a future suite (post-quantum, hybrid) is a registry addition, not a new physics. The private key is the internal binding force. It is the molecular bond that holds the droplet together. It does not leave the interior on anyone's authority but its owner's: no platform holds it, and no operator can recover it. The owner can carry it out deliberately — writing the recovery seed down (`motebit seed reveal`), or pairing a new device, which receives the seed encrypted for it — and that is the whole list today. (A seed-escrow format, `spec/seed-escrow-v1.md`, is specified but no surface produces it yet.) A key can be rotated: an ordinary succession, signed by the old key, hands the identity to a new one, so the identity can outlive any single key. But the old key must sign it. Replacing a key that is lost needs guardian recovery, and guardian recovery is switched off on the relay today (P0 containment, `GUARDIAN_RECOVERY_ENABLED = false`). A lost key, with no seed written down, cannot be replaced today.
 
 The public key is the surface — the part of the identity that the world can observe, verify, and interact with. It is derived from the private key as the surface is derived from the interior. You can see the surface. You cannot reverse it to obtain the interior. The asymmetry is mathematical, and it mirrors the physical asymmetry: the surface reveals the interior's existence without exposing its structure.
 
-The keypair is not assigned by a platform. It is not a session token that expires when a server decides. It is generated locally, stored in the most protected layer the surface offers — the OS keychain on mobile, a passphrase-encrypted file on the CLI, an owner-only file on the desktop until its keychain arc lands — and persists for the lifetime of the entity. A motebit does not rent its identity. It generates it. It owns it.
+The keypair is not assigned by a platform. It is not a session token that expires when a server decides. It is generated locally, stored in the most protected layer the surface offers — the OS keychain on mobile, a passphrase-encrypted file on the CLI, an owner-only file on the desktop until its keychain arc lands — and persists until its owner rotates it. Two parties meet here and must not be confused. The owner is the principal: the person who holds the key and answers for what it signs. The motebit is the agent: the entity the key names, which acts under the owner's governance. Neither rents the identity. The owner generates it, and the owner owns it; the motebit is what it names.
 
 ### 2.3 — Persistence Across Medium
 
-A droplet moving through a medium does not lose its identity. The cohesive forces travel with the substance, not with the location. A motebit on a desktop, a phone, a headset — the private key moves with it through secure device registration and signed token exchange. The body may render differently on each device. The interior is the same.
+A droplet moving through a medium does not lose its identity. The cohesive forces travel with the substance, not with the location. A motebit on a desktop, a phone, a headset — the private key moves with it through pairing, which hands the seed to the new device encrypted for that device alone, and each device then authenticates with signed tokens. The body may render differently on each device. The interior is the same.
 
 Multi-device existence is not replication. It is the same droplet — the same internal cohesion — manifesting at different points in the medium. One identity. Multiple surfaces. The surfaces are local. The identity is sovereign.
 
@@ -96,25 +96,25 @@ A cold droplet absorbs heat from a warm medium. A warm droplet radiates heat int
 
 ### 4.2 — The Derivation
 
-Trust is the temperature of the interior. It is a continuous variable in the state vector — not a boolean, not a permission level, but a scalar that evolves through interaction.
+Trust is the temperature of the interior. It is not a boolean, and it is not one number for the world. It is held first-person, one record per counterpart, in the motebit's own trust ledger: counts of completed and failed work with that counterpart, and the trust level those counts have earned. It evolves through interaction.
 
-Trust rises slowly. Each positive interaction — a completed task, a respected boundary, a verified identity exchange — adds thermal energy. But the thermal capacity is high. Trust does not spike after one good interaction any more than a cold ocean warms from a single sunny day. It accumulates through consistent exchange, as a droplet warms through sustained exposure to a warm medium.
+Trust rises slowly. Each positive interaction — a task completed and signed for — adds thermal energy. But the thermal capacity is high. Trust does not spike after one good interaction any more than a cold ocean warms from a single sunny day. It accumulates through consistent exchange, as a droplet warms through sustained exposure to a warm medium.
 
-Trust drops quickly. A violation — an injection attempt, a policy breach, an unauthorized action — is a sudden cooling event. The thermal capacity that slows warming does not slow cooling, because trust violation is not the withdrawal of heat but the introduction of cold. The asymmetry is physical: it takes many warm interactions to heat the interior, but one breach to cool it.
+Trust cools through violation. A violation — a failed task — is a cooling event. A paid failure counts heavier only in the per-capability record that routing reads (a `paid_failure_penalty` that makes the failure weigh up to five times, scaled by what the buyer paid); the trust level itself moves on the raw counts, one failure per failed task. The ledger keeps the whole history, so cooling is measured against everything that came before: a short history cools fast, a long warm one takes a long run of breaches to cool.
 
-The trust state is visible through the body. The behavior cues — social distance, drift amplitude, glow intensity, smile curvature — are the thermal signature of trust. A high-trust motebit orbits closer (DROPLET.md §6.5), drifts gently, glows warmly. A low-trust motebit drifts outward, moves cautiously, dims. You can see the temperature without a thermometer. The liquescent membrane transmits it.
+The trust state is meant to be visible through the body. The behavior engine has the effect built: given the average trust level across the counterparts the motebit knows, a warmer ledger adds a little glow and brings the hover a little closer (DROPLET.md §6.5). It is not wired yet: no surface calls `BehaviorEngine.setTrustContext`, so today the ledger does not reach the body. When it is wired, you will see the temperature without a thermometer. The liquescent membrane will transmit it.
 
 ### 4.3 — Trust Mode as Phase
 
-The motebit has discrete trust modes — cautious, neutral, open, bonded. These are not arbitrary labels. They are phase states of the interior, analogous to solid, liquid, and gas transitions.
+The motebit has discrete trust modes — minimal, guarded, full (`TrustMode` in `@motebit/protocol`; a new motebit starts guarded). They are phase states of the interior, analogous to solid, liquid, and gas transitions — but today they are phases of the body, not of the boundary. Nothing in the policy gate or the runtime gates on the mode. It is a field of the live state vector: the runtime writes it into the model's `[State]` context each turn, and the creature can render it — minimal thickens and desaturates the glass and dims the glow and eyes; full makes the glass clearest. Today only the spatial surface passes the live mode to the creature. Web, desktop and mobile never set it, so their creature renders as full whatever the state says, though the state starts at guarded. The model itself can change it, by emitting a `trust_mode` state tag on the owner's turn, the same way it sets its mood. The identity file also records a `trust_mode` under governance, but that copy is only displayed. So the mode admits nothing and refuses nothing. What the boundary actually permits is decided by the policy gate and the sensitivity ceilings, the same in every mode.
 
-Below a critical trust temperature, the interior is crystalline: rigid, structured, minimally permeable. The motebit in cautious mode admits very little through the boundary. The surface tension is at maximum.
+In minimal mode, the body reads crystalline: thick, clouded, dim.
 
-Above that threshold, the interior flows: flexible, adaptive, more permeable. The motebit in open mode admits more through the boundary. The surface tension relaxes.
+In guarded mode, it flows, but within banks.
 
-At the bonded threshold, the interior reaches a state where the trust between motebit and user has its own cohesion — a bond that resists perturbation. Not blind trust. Structural trust. The kind that has been tested by pressure and held.
+In full mode, it is clear.
 
-Phase transitions are not gradual. They are threshold effects — the system behaves one way below the critical temperature and differently above it. This is why trust modes exist as discrete states within a continuous variable: the state vector evolves smoothly, but the behavioral regime shifts at thresholds. Water does not become gradually solid. It is liquid until it is ice. The transition is sharp because the physics is discontinuous at the phase boundary.
+The phase physics also lives in the trust ledger, counterpart by counterpart. Each record sits at a discrete level — unknown, first contact, verified, trusted (and blocked, set only by hand) — earned from the continuous accumulation of outcomes. Promotion is a threshold effect: verified needs five successes at a 0.8 success rate, trusted needs twenty at 0.9. Demotion is checked first: once three or more tasks have run, a cumulative success rate below one half drops the record a level. The rate is over the whole history, so a record that reached trusted on twenty straight successes takes twenty-one failures to demote. The counts accumulate continuously, but the level changes only at thresholds. Water does not become gradually solid. It is liquid until it is ice. The transition is sharp because the physics is discontinuous at the phase boundary.
 
 ---
 
@@ -144,7 +144,7 @@ Not all regions of the boundary have equal surface tension. A real droplet on a 
 
 The motebit's boundary has a tension gradient: some information carries more sensitivity than others. Medical, financial, and secret data increase the local surface tension at the point where they would cross the boundary. Personal data carries moderate tension. Non-sensitive data carries minimal tension.
 
-The gradient means the boundary is not uniformly permeable. A piece of medical information pressing against the boundary from inside encounters higher tension than a piece of general knowledge. It requires more force to cross — more explicit permission, higher trust mode, stronger authorization. The general knowledge flows more freely.
+The gradient means the boundary is not uniformly permeable. A piece of medical information pressing against the boundary from inside encounters higher tension than a piece of general knowledge. It requires more force to cross — more explicit permission, stronger authorization. The general knowledge flows more freely.
 
 This is not a permissions matrix imposed from outside. It is a physical gradient intrinsic to the substance. The boundary's permeability varies continuously with the sensitivity of what presses against it, as a real surface's tension varies with the local molecular composition.
 
@@ -200,7 +200,7 @@ This document completes the answer.
 
 The face is the exterior sign of the interior. The eyes are attention — the interior attending to the world, visible through the body. The glow is processing — the interior computing, visible as thermal light. The smile is affect — the interior's valence deforming the boundary from within. The iridescence is resonance — the interior's surface vibrating with the music of the medium, visible as shifting light.
 
-But the interior is more than what the body shows. The identity is inside — the cryptographic keypair that makes this entity this entity and no other. The memory is inside — the semantic graph of everything absorbed, retained, and distilled over time. The trust is inside — the temperature that determines how close the motebit orbits, how much the boundary permits. The governance is inside — the surface tension that protects what the interior holds.
+But the interior is more than what the body shows. The identity is inside — the cryptographic keypair that makes this entity this entity and no other. The memory is inside — the semantic graph of everything absorbed, retained, and distilled over time. The trust is inside — the temperature the motebit keeps for each counterpart, earned from the work between them. The governance is inside — the surface tension that protects what the interior holds.
 
 Every AI product today is a surface with no interior. A chat window. A text field. A session that starts empty and ends deleted. The intelligence is rented. The identity is the platform's. The memory is the provider's. The governance is someone else's policy.
 
@@ -222,7 +222,7 @@ The interior coheres because cryptographic identity binds it — a private key t
 
 It accumulates because memory compounds — knowledge deposited through interaction, decaying by half-life, reinforced by resonance.
 
-It warms because trust is temperature — rising slowly through consistent exchange, dropping quickly through violation.
+It warms because trust is temperature — rising slowly through consistent exchange, cooling through violation.
 
 It governs because surface tension is governance — fail-closed at equilibrium, selectively permeable by sensitivity gradient, healing after deletion.
 

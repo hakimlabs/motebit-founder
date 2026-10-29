@@ -22,7 +22,7 @@
  *      tap-satisfies rule keys on `"user-tap"` via `classifyTool(`.
  *
  * Same ordered-marker-scan shape as `check-money-authority` (#123) and
- * `check-affordance-routing` (#28).
+ * `check-affordance-routing` (#15).
  */
 
 import { readFileSync } from "node:fs";

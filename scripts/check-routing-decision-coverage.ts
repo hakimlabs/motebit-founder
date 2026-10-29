@@ -1,7 +1,7 @@
 /**
  * Auto-router consumer-registry coverage gate.
  *
- * Closed-registry / structural-lock pattern (same shape as #79
+ * Closed-registry / structural-lock pattern (same shape as #144
  * `check-universal-slash-coverage`, #94 `check-slab-chrome-coverage`):
  *
  *   1. The auto-router's protocol primitive `dispatchRouting`

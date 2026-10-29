@@ -1,8 +1,8 @@
 /**
  * Slab-chrome matrix cross-surface coverage gate.
  *
- * Closed-registry / structural-lock pattern (same shape as #79
- * `check-universal-slash-coverage`, #10 `check-suite-declared`, #46
+ * Closed-registry / structural-lock pattern (same shape as #144
+ * `check-universal-slash-coverage`, #10 `check-suite-declared`, #83
  * `check-audience-canonical`, #85 `check-artifact-type-canonical`,
  * #92 `check-transparency-processors-canonical`, #93
  * `check-publishable-package-metadata`):

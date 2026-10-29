@@ -30,7 +30,7 @@ Delegation is a relational primitive — its invariants split into wire-shape (p
 
 1. **Identity-bound + Ed25519-signed via the `SuiteId` registry.** Every delegation token / task / receipt is signed by the delegator's Ed25519 keypair (suite-dispatched per [`agility-as-role.md`](agility-as-role.md), so PQ migration is a registry append, not a wire-format break). The signature binds the delegation to a specific `MotebitId`; delegations are never anonymous.
 2. **JCS-canonicalized.** RFC 8785 JSON Canonicalization Scheme — the bytes that get signed are byte-identical across implementations. Same invariant as [`receipts-unified.md`](receipts-unified.md) — the wire shape is stable.
-3. **Independently verifiable** via `@motebit/verifier` (Apache-2.0, zero monorepo deps). A third party with the delegator's public key can verify any delegation offline without relay contact. The CLI tool `motebit-verify` bundles the path: `motebit-verify delegation-receipt <json>`.
+3. **Independently verifiable** via `@motebit/verifier` (Apache-2.0; its only workspace dependencies are the Apache-2.0 `@motebit/crypto` and `@motebit/protocol`). A third party with the delegator's public key can verify a delegation offline without relay contact: the library exports `verifyStandingDelegation` and `verifyDelegationTokenVerdict` for grants and per-tick tokens. The CLI tool `motebit-verify` covers the receipt side: `motebit-verify <receipt.json>` auto-detects an `ExecutionReceipt` and recursively verifies its nested `delegation_receipts` chain. There is no `delegation-receipt` subcommand, and the CLI does not take a bare delegation token or standing grant.
 
 ### Semantic invariants (relational shape — three)
 

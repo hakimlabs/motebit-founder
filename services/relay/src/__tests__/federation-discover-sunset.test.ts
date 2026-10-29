@@ -16,7 +16,7 @@ import { DEFAULT_REQUIRE_DISCOVER_SIGNATURE } from "../federation.js";
  * the default flips to strict. Honest closes: (a) flip the default — change the one
  * line in federation.ts (the issue's intent), or (b) move the sunset with a
  * rationale here AND in spec §4.1.1 + docs/operator/self-host.md. Same deadline
- * discipline as `check-coverage-graduation` (#111).
+ * discipline as `check-coverage-graduation` (drift-defense #130, issue #111).
  */
 describe("requireDiscoverSignature default — #188 sunset", () => {
   // 2026-07-21 — the announced tolerant-reader sunset (spec §4.1.1 + self-host.md).
