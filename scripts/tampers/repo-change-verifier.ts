@@ -13,7 +13,7 @@
  * not merged on this base). Each command runs ONE test (`-t` on its exact
  * full name) and is RED only when that file reports a failure.
  *
- *   node scripts/tampers/repo-change-verifier.ts
+ *   npx tsx scripts/tampers/repo-change-verifier.ts
  */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,6 +80,18 @@ const TAMPERS: TamperEntry[] = [
     edit(
       'new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })',
       'new TextDecoder("utf-8", { fatal: true, ignoreBOM: false })',
+    ),
+  ),
+  entry(
+    "integrity: tick grant_id made optional",
+    `${INT} a tick without grant_id is malformed`,
+    edit(
+      '        "grant_id",\n        "suite",\n        "signature",\n      ],\n      ["not_before"],',
+      '        "suite",\n        "signature",\n      ],\n      ["not_before", "grant_id"],',
+    ),
+    edit(
+      "    isString(v.grant_id) &&\n    v.suite",
+      "    (v.grant_id === undefined || isString(v.grant_id)) &&\n    v.suite",
     ),
   ),
   entry(
@@ -207,20 +219,23 @@ const TAMPERS: TamperEntry[] = [
     `${INT} a non-canonical allowed path is rejected: ${JSON.stringify("/docs/a.md")}`,
     edit("    if (!PATH_SEGMENT.test(seg)) return false;\n", ""),
   ),
-  entry(
-    "integrity: '.' segment rule removed",
-    `${INT} a non-canonical allowed path is rejected: ${JSON.stringify("docs/./a.md")}`,
-    edit('    if (seg === "." || seg === ".." ||', '    if (seg === ".." ||'),
-  ),
-  entry(
-    "integrity: '..' segment rule removed",
-    `${INT} a non-canonical allowed path is rejected: ${JSON.stringify("docs/../a.md")}`,
-    edit('seg === "." || seg === ".." || seg.toLowerCase()', 'seg === "." || seg.toLowerCase()'),
+  ...(["docs/./a.md", "docs/../a.md", "docs/a.", ".git./config"] as const).map((bad) =>
+    entry(
+      `integrity: trailing-dot segment rule removed (${bad})`,
+      `${INT} a non-canonical allowed path is rejected: ${JSON.stringify(bad)}`,
+      edit(
+        '    if (seg.endsWith(".") || seg.toLowerCase() === ".git") return false;',
+        '    if (seg.toLowerCase() === ".git") return false;',
+      ),
+    ),
   ),
   entry(
     "integrity: '.git' segment rule made case-sensitive",
     `${INT} a non-canonical allowed path is rejected: ${JSON.stringify(".GIT/config")}`,
-    edit('seg.toLowerCase() === ".git"', 'seg === ".git"'),
+    edit(
+      'seg.endsWith(".") || seg.toLowerCase() === ".git"',
+      'seg.endsWith(".") || seg === ".git"',
+    ),
   ),
   entry(
     "integrity: allowed_paths canonical check removed",
@@ -514,7 +529,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "authority: tick activation not mapped",
     `${AUT} a tick before its not_before reads not_yet_valid`,
-    off('  } else if (tokenVerdict.authority === "not_yet_valid") {'),
+    off("  } else if (now < tickStart) {"),
   ),
   entry(
     "authority: tick insufficiency not mapped",
@@ -525,7 +540,7 @@ const TAMPERS: TamperEntry[] = [
     "authority: unavailable time not reported",
     `${AUT} a landed change whose time could not be accepted reads unknown`,
     edit(
-      '    fail("authority.repo_change.time_unavailable", "the landing time could not be accepted");\n',
+      '    fail("authority.repo_change.time_unavailable", "the evaluation time could not be accepted");\n',
       "",
     ),
   ),
@@ -796,7 +811,88 @@ const TAMPERS: TamperEntry[] = [
     "authority: verdict authority ignores activation",
     `${AUT} a tick before its not_before reads not_yet_valid`,
     edit(
-      '  else if (codes.has("authority.repo_change.tick_not_yet_valid")) authority = "not_yet_valid";\n',
+      '    codes.has("authority.repo_change.grant_not_yet_valid") ||\n    codes.has("authority.repo_change.tick_not_yet_valid")\n',
+      '    codes.has("authority.repo_change.grant_not_yet_valid")\n',
+    ),
+  ),
+
+  ...(
+    [
+      ["pull_request now = NaN reads unknown"],
+      ["pull_request now = Infinity reads unknown"],
+      ["pull_request now = -Infinity reads unknown"],
+      ["landed landedAt = NaN reads unknown"],
+      ["landed landedAt = Infinity reads unknown"],
+      ["landed landedAt = -Infinity reads unknown"],
+      ["a landed mode with no landedAt (a JS caller) reads unknown, never the local clock"],
+    ] as const
+  ).map(([title]) =>
+    entry(
+      `authority: non-finite evaluation time accepted (${title})`,
+      `${AUT} an evaluation time that is not a finite number is no time at all ${title}`,
+      edit(
+        '  const now = typeof rawNow === "number" && Number.isFinite(rawNow) ? rawNow : null;',
+        "  const now = rawNow === null ? null : (rawNow as number);",
+      ),
+    ),
+  ),
+  entry(
+    "authority: grant activation not checked against the evaluation time",
+    `${AUT} a grant issued in the future reads not_yet_valid at the evaluation time`,
+    off("  } else if (now < grantStart) {"),
+  ),
+  entry(
+    "authority: verdict authority ignores grant activation",
+    `${AUT} a grant issued in the future reads not_yet_valid at the evaluation time`,
+    edit(
+      '    codes.has("authority.repo_change.grant_not_yet_valid") ||\n    codes.has("authority.repo_change.tick_not_yet_valid")\n',
+      '    codes.has("authority.repo_change.tick_not_yet_valid")\n',
+    ),
+  ),
+  entry(
+    "authority: tick issued_at not checked against the evaluation time",
+    `${AUT} a tick issued in the future (no not_before) reads not_yet_valid`,
+    edit(
+      "  const tickStart = Math.max(tick.issued_at, tick.not_before ?? tick.issued_at);",
+      "  const tickStart = tick.not_before ?? Number.NEGATIVE_INFINITY;",
+    ),
+  ),
+  entry(
+    "authority: grant issued_at not checked against the evaluation time",
+    `${AUT} a grant issued in the future reads not_yet_valid at the evaluation time`,
+    edit(
+      "  const grantStart = Math.max(grant.issued_at, grant.not_before ?? grant.issued_at);",
+      "  const grantStart = grant.not_before ?? Number.NEGATIVE_INFINITY;",
+    ),
+  ),
+  entry(
+    "authority: back-dated tick accepted",
+    `${AUT} a tick back-dated before its grant is insufficient`,
+    off("  if (tick.issued_at < grant.issued_at) {"),
+  ),
+  entry(
+    "authority: inverted grant window accepted",
+    `${AUT} a grant that starts after it expires is insufficient`,
+    off("  if (grantStart > grant.expires_at) {"),
+  ),
+  entry(
+    "authority: inverted tick window accepted",
+    `${AUT} a tick that starts after it expires is insufficient`,
+    off("  if (tickStart > tick.expires_at) {"),
+  ),
+  entry(
+    "authority: lifetime counted from issued_at, not activation",
+    `${AUT} the grant lifetime counts from its activation (not_before)`,
+    edit(
+      "  const lifetime = grant.expires_at - grantStart;",
+      "  const lifetime = grant.expires_at - grant.issued_at;",
+    ),
+  ),
+  entry(
+    "authority: undecodable tracked path dropped silently",
+    `${ENT} a tracked path that is not UTF-8 fails the case-collision rule closed`,
+    edit(
+      '      fail(\n        "authority.repo_change.entry_case_collision",\n        "a tracked path is not valid UTF-8, so no case collision can be ruled out",\n      );\n',
       "",
     ),
   ),
