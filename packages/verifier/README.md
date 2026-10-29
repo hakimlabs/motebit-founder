@@ -51,6 +51,7 @@ Everything below is exported from the package root. The prose sections that foll
 - **`verifyCostAttestation` / `verifyInvoice` / `executionReceiptDigest` / `costAttestationDigest`** — settlement-invoice verifiers plus the two mandated digest helpers.
 - **`verifyWithdrawalReceipt`** — the relay-signed completed-withdrawal receipt, re-checked offline.
 - **`signRequestEnvelope` / `verifyRequestEnvelope`** — stateless per-request identity authentication against a registered key.
+- **`verifyRepoChange` / `ALL_REPO_CHANGE_REPAIR_CODES`** — governed repo change: judge one agent's repository change from its evidence bundle and the inputs a caller computes from git; every failure lands on a verdict axis with a repo-change repair code.
 
 ## What it verifies
 
@@ -84,6 +85,8 @@ For the same reason — authority is the scope/chain, not a `motebit_id → key`
 The **withdrawal receipt** closes the money-out side of the self-attesting contract: a completed withdrawal is a truth the relay asserts, so it must be verifiable without relay contact. **`verifyWithdrawalReceipt`** re-checks the relay's Ed25519 signature over a `WithdrawalReceiptPayload` — the money-relevant subset of the market-v1 §2.9 wire record (`withdrawal_id`, `motebit_id`, `amount`, `currency`, `destination`, `payout_reference`, `completed_at`, `relay_id`). A consumer reconstructs the payload from the record's fields (all present on the response, including `relay_id`) and verifies against the carried `relay_public_key`, fail-closed on any decode or mismatch.
 
 On the same principle, the **signed-request-envelope family** is re-exported as explicit signer/verifier — **`signRequestEnvelope`** and **`verifyRequestEnvelope`** ([`signed-request-envelope@1.0`](https://github.com/motebit/motebit/blob/main/spec/signed-request-envelope-v1.md)): stateless per-request identity authentication where the signature is verified against the identity's **registered** public key (resolved by the caller from `motebit_id`, never carried by the request), the payload travels detached behind a `payload_digest`, and `aud` binding kills cross-service replay. Not auto-detected — the key comes from the registry, not the envelope.
+
+**Governed repo change** ([`repo-change@1.0`](https://github.com/motebit/motebit/blob/main/spec/repo-change-v1.md)): **`verifyRepoChange`** is a pure function — no git, no file I/O, no repository policy — over the bundle bytes (`.motebit/bundles/<grant_id>.json`) and the inputs a caller computes from git: the change entries from two full trees, the paths tracked at the landing parent, the role-typed `(motebit_id, public_key)` pins, the path predicate as data, the strictly parsed revocations with their freshness, the spent status, the expected repository, the mode's ancestry and shape results, and the evaluation time. It returns `{verdict, outcome, diagnostics}`: a `VerificationVerdict` of `type: "repo_change"` in which every failed rule lands on one of the four axes with a code from **`ALL_REPO_CHANGE_REPAIR_CODES`** (so `isFullyVerified` is false whenever any rule failed), the receipt's `status` as `outcome` (a truthful denial keeps valid authority), and every failed rule in `diagnostics`. Accept a change only when the verdict is fully verified **and** `outcome === "completed"`.
 
 ## Guarantees
 
