@@ -1,0 +1,35 @@
+Daniel Hakim, motebit (open-source protocol for agent identity, delegation and verifiable receipts; https://github.com/motebit/motebit)
+
+Topic: the human-approval gates and deterministic enforcement in the agentic-AI scope of Build 3, from a live test of agent-authored changes on GitHub.
+
+CONTEXT
+
+We run a repository where AI agents author pull requests under their own GitHub identity, and a required status check decides whether a change may merge without the founder's approval. The check classifies each change by risk tier and counts only approvals that carry authority. Before letting any agent approval carry weight, we ran a matrix of positive and negative tests against GitHub's real behaviour, not its documentation. Each result is recorded in our milestone ledger (https://github.com/motebit/motebit/blob/main/docs/ops/milestone-ledger.md), which copies the decisive values inline because GitHub deletes run logs after their retention period. Where a public workflow run exists, we cite its id. The observations below hold in our tested configuration (a public repository; a ruleset requiring code-owner review, dismissing stale reviews on push, with an empty bypass list; a merge queue) and may differ under other GitHub settings.
+
+We are not claiming conformance to anything. We offer these observations because they bear directly on how an "outer loop" approval gate for agent-authored changes behaves in practice.
+
+OBSERVATIONS
+
+1. An approval recorded is not an approval with authority. On a public repository, an account whose access had been removed could still submit an APPROVED review (author association NONE). GitHub did not count it toward the required approval. A policy engine that reads review state from the API, rather than what the platform counts, would be misled. (Matrix row M7, PR #1191 — observed live and recorded in the ledger, without a workflow run id: removing access changes no check run.)
+
+2. Restoring access reactivated earlier approvals in our tested configuration. Re-adding that reviewer as a collaborator made all of its earlier approvals count again, including the one submitted while it had no access (M7, observed live, no run id). Revoking a reviewer and restoring it later is therefore not a clean revocation. Our operating rule now dismisses a restored reviewer's standing approvals before anything is queued. That is an operational mitigation, not a general fix: it relies on the operator applying it.
+
+3. Dismissal rewrites history. A dismissed review's state becomes DISMISSED, whether a person or a push dismissed it, so a verifier that re-reads state no longer sees that approval. That is the safe direction. But it means an evidence record of "who approved what" must be captured when the decision is made. It cannot be reconstructed from the platform later. (M6, run 40633462122, attempt 1.)
+
+4. The decision must be made on the integration commit, by policy from a protected revision. A PR-level check reflects the PR as of its last update and can be stale. Our deciding check runs again on the merge-queue commit. It executes policy only from the protected base revision, treats the proposed change strictly as data, and records the policy revision, the evaluated commit and the decision for every run. A pass earlier at PR level did not let a later unauthorized approval through. (M5, run 40586743264.)
+
+5. Cancelled runs and duplicate events matter. Runs of the same event on one PR share a concurrency group, so an edit cancels a run in progress. A cancelled required check counts as a failure until it is re-run, and re-runs keep the original timestamp. Evidence should cite the run id and attempt, not the time.
+
+6. A kill switch has to bind historical approvals. An agent approval given while autonomy was switched on carried no authority after the switch was turned off. The decision is re-evaluated against the current switch at merge time. (R3, run 40640204756.)
+
+Limits of these tests: we ran the revocation case (M7) only on a change outside the autonomous tier. The variant with autonomy switched on and an otherwise eligible change was not run, so these results do not claim complete coverage of revocation.
+
+SUGGESTIONS FOR THE BUILD 3 SCOPE
+
+- Treat "approval with authority" as a computed decision, re-evaluated on the integration commit, not as a review event.
+- Record, for every gate decision: the policy revision, the evaluated commit, the approvals counted, and the result. Capture them when the decision is made, because the platform's own record changes afterwards.
+- Include revocation and restoration of an agent or reviewer identity in the demonstration's negative tests. Restoration was our most surprising result.
+
+We are building the next step, an agent change whose delegation, limits and outcome a third party can verify offline from a clone. We would be glad to share that evidence when it exists.
+
+Contact: daniel@motebit.com

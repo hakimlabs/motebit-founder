@@ -31,7 +31,7 @@ Order: A → B → C → D → E. F has the same priority as B and starts when B
 | Id  | Milestone                                                                                                                                                                                 | Owner                                         | Depends on | Status                             |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ---------- | ---------------------------------- |
 | A   | Repository autonomy, enforced outside the agent                                                                                                                                           | agent lead (engineering); founder (authority) | none       | closed 2026-10-28                  |
-| B   | First complete motebit-governed DevSecOps execution: identity, scoped delegation, exact revision, policy decision, external enforcement, signed receipts, provider independence           | agent lead; founder                           | A          | not started                        |
+| B   | First complete motebit-governed DevSecOps execution: identity, scoped delegation, exact revision, policy decision, external enforcement, signed receipts, provider independence           | agent lead; founder                           | A          | in progress (step 1 of 6 merged)   |
 | C   | Denial, revocation (including cascade revocation and continuous authorization), tampering, restart and offline verification; what survives a compromised agent                            | agent lead                                    | B          | not started                        |
 | D   | Minimum standards interoperability profile (OAuth/OIDC; evaluate SPIFFE) as adapters; motebit keeps its own identity root                                                                 | agent lead                                    | B          | not started                        |
 | E   | Reproducible evidence package for NCCoE feedback: implemented, demonstrated, limitations and gaps, kept apart                                                                             | agent lead; founder                           | B, C, D    | not started                        |
@@ -155,12 +155,57 @@ Setup:
 
 **Next.** Milestone B.
 
-## B–F
+## B. Governed repo change
 
-Not started. Each section gains its goal, mechanism, evidence table and acceptance tests when it starts. Scope fixed by the founder:
+**Goal.** For one repository change made by an agent, an independent party holding a clone and an offline verifier can establish which agent acted, under whose authority, within what limits, with what outcome, and that the landed commit is that outcome. The model can be swapped without changing any of that. B adds evidence and a verifier, and **no merge authority**: governed changes merge under A's tier rules, and `AUTONOMY_T0` stays `off`.
+
+**Mechanism.** The design of record is [`docs/proposals/governed-repo-change-v1.md`](../proposals/governed-repo-change-v1.md) (#1198, merged 2026-10-29T01:24:19Z as `17784c5a0`, frozen after six cold-review rounds and a confirmation round):
+
+- The founder signs a one-landing `StandingDelegation` whose `subject_binding` reaches a task scope: exact paths, base branch and task.
+- The agent runs with no host interior and exactly two frozen tools built from that scope. It signs every tool call, and an `ExecutionReceipt` recording the exact entries changed.
+- The evidence lands in the same squash commit as the change. Protected `main` is the custody boundary for pins, revocations and spent grants. That is custody, not proof of immutability; the trust assumptions are in the design.
+- The protocol is [`spec/repo-change-v1.md`](../../spec/repo-change-v1.md), and the verifier is `verifyRepoChange` in `@motebit/verifier`.
+
+**Build order and evidence.**
+
+| Step | What                                                                                                                                        | Level                          | Evidence                                                                                                                                                                                                                                  |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0    | Delegation-family keys verify and sign only in their canonical spelling (a revoked grant spelled with an uppercase key stayed honoured)     | implemented                    | #1200, merged 2026-10-29T01:15:00Z as `3156fc4ad`; `autonomy-tier` run 40796856147 PASS `founder-approved`. Tampers 11/11 RED                                                                                                             |
+| pre  | The tamper runner reads its own vitest report again. Vitest-mode suites had aborted at baseline since #1062; none came back GREEN on re-run | implemented                    | #1201, merged 2026-10-29T05:04:44Z as `6b1252a20`; run 40819735324 PASS `founder-approved`                                                                                                                                                |
+| 1    | Spec, wire artifacts and the pure verifier                                                                                                  | implemented; tested internally | #1202, merged 2026-10-29T07:29:53Z as `33a1d3775`; run 40833205514 PASS `founder-approved`. Tamper suite 166/166 RED, one per condition of every axis. Four cold-review rounds, two fail-open holes found and closed, final verdict MERGE |
+| 2    | Runtime: receipts for every tool call, durable sink, no-interior run, frozen two-tool registry                                              | not started                    |                                                                                                                                                                                                                                           |
+| 3    | Founder-side `motebit repo-task delegate` and `revoke`                                                                                      | not started                    |                                                                                                                                                                                                                                           |
+| 4    | T0 allowlist as data; agent-side `motebit repo-task run`; bundle writer; `motebit-verify repo-change`                                       | not started                    |                                                                                                                                                                                                                                           |
+| 5    | Role-typed pins and revocations under `.motebit/`; `governed-change.yml` in its expand state                                                | not started                    |                                                                                                                                                                                                                                           |
+| 6    | Live acceptance tests B1–B6                                                                                                                 | not started                    |                                                                                                                                                                                                                                           |
+
+**Acceptance tests (from the design).**
+
+- B1: a governed change verifies in CI and offline on a fresh clone against a trusted tip.
+- B2: the same task with a second provider.
+- B3: a path outside the scope fails `authority`.
+- B4: a foreign signer fails `identityBinding`.
+- B5a: a re-spelled tick fails `integrity`.
+- B5b: a reused grant fails `authority`.
+- B6: a landed revocation fails `revocation`.
+
+Each records the run id, event, policy SHA, head and landing commits, evaluation time and every axis.
+
+**Founder decisions** (accepted with #1198):
+
+- writes are bounded by the signed scope, with no per-write approval;
+- creating agent identity A and signing the first grant with F are authorized, and confirmed with the founder at the moment of each key operation;
+- the first task is one T0-allowlisted docs file.
+
+**Next.** Step 2.
+
+## C–F
+
+Not started. Each section gains its goal, mechanism, evidence table and acceptance tests when it starts. Gaps already assigned to C are listed in the B design: continuous monitoring, continuous authorization, cascade revocation, an independent witness of `main`, zero standing privilege for the publisher credential, binding to an approved runtime configuration, and the two fail-open verify defaults (with their own design and release). Scope fixed by the founder:
 
 - **Protocol-first.** Enterprise IAM, OAuth/OIDC and SPIFFE are interop adapters, never the identity root (D).
 - **No new layers without evidence.** No new platform layer or enterprise feature without evidence that the core protocol needs it.
+- **Standards engagement** is recorded in [`nist/README.md`](nist/README.md), one row per event, each with its own evidence and status. A form's receipt is never described as review, endorsement or adoption.
 - **Exact public claims.** Each claim states what is measured and what is demonstrated. A's R2 and R3 demonstrate revocation within repository autonomy only. Revocation of motebit's own delegations stays "not yet demonstrated" until C passes. Third-party integration stays "absent" until F.
 
 ## Out of scope for A
