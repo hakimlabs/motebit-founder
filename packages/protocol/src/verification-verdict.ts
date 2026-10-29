@@ -48,9 +48,14 @@ export type RevocationStatus = "fresh" | "stale" | "unchecked" | "revoked";
  * The temporal basis a time-dependent axis was evaluated against. `clockless` =
  * no clock needed; `local_clock` = the verifier's own clock (first-person time,
  * self-borne risk); `ledger_anchored` = a chain slot/height — ORDERING, not
- * wall-clock (see docs/doctrine/verify-family-fail-closed.md).
+ * wall-clock (see docs/doctrine/verify-family-fail-closed.md);
+ * `operator_recorded` = a wall-clock time an OPERATOR recorded and signed, and
+ * the verifier accepted only under a pinned key of that operator — neither the
+ * verifier's clock nor a chain ordering (first use: a landed repo change judged
+ * at its squash commit's committer time, spec/repo-change-v1.md §9). Agile by
+ * append: existing values keep their meaning.
  */
-export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
+export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored" | "operator_recorded";
 
 /**
  * How a `RevocationStatus` was established, so an OFFLINE/P2P verifier can dial
@@ -120,7 +125,9 @@ export interface RepairInstruction {
  * `unknown` fallthrough; `delegation_token` covers the per-tick token/grant
  * path (not a top-level auto-detected artifact). The last four (2026-07-08,
  * EvalAttestation arc) name the Auditor's additional measurement subjects —
- * artifacts verified by explicit (non-auto-detected) laws. Widening is
+ * artifacts verified by explicit (non-auto-detected) laws. `repo_change`
+ * (governed repo change, spec/repo-change-v1.md) is a whole change judged from
+ * its evidence bundle by `verifyRepoChange` in `@motebit/verifier`. Widening is
  * additive: existing values are unchanged.
  */
 export type VerdictSubject =
@@ -135,7 +142,8 @@ export type VerdictSubject =
   | "succession"
   | "revocation"
   | "bond_commitment"
-  | "solvency_proof";
+  | "solvency_proof"
+  | "repo_change";
 
 /**
  * The structured verification verdict. DELIBERATELY carries no top-level `valid`

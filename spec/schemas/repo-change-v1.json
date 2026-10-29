@@ -1,0 +1,196 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/repo-change-v1.json",
+  "title": "RepoChangeResult (v1)",
+  "description": "The change record: the canonical-JSON result of the agent's ExecutionReceipt, for every receipt status.",
+  "type": "object",
+  "properties": {
+    "spec": {
+      "type": "string",
+      "const": "motebit/repo-change@1.0",
+      "description": "Spec tag of the change record."
+    },
+    "grant_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "The grant the run acted under."
+    },
+    "grant_digest": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "sha-256",
+          "description": "Hash algorithm (a DigestAlgorithm)."
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 digest (64 characters)."
+        }
+      },
+      "required": ["algorithm", "value"],
+      "additionalProperties": false,
+      "description": "SHA-256 of the canonical JSON of the whole signed grant, signature included."
+    },
+    "tick_digest": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "sha-256",
+          "description": "Hash algorithm (a DigestAlgorithm)."
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 digest (64 characters)."
+        }
+      },
+      "required": ["algorithm", "value"],
+      "additionalProperties": false,
+      "description": "SHA-256 of the canonical JSON of the whole signed tick, signature included."
+    },
+    "scope_digest": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "sha-256",
+          "description": "Hash algorithm (a DigestAlgorithm)."
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 digest (64 characters)."
+        }
+      },
+      "required": ["algorithm", "value"],
+      "additionalProperties": false,
+      "description": "SHA-256 of the canonical JSON of the scope; equals the grant's subject_binding.digest."
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The scope's repo."
+    },
+    "object_format": {
+      "type": "string",
+      "enum": ["sha1", "sha256"],
+      "description": "Git object format of the repository; fixes the length of every object id."
+    },
+    "parent_commit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+      "description": "The commit the change commit sits on. Lowercase hex; its length is fixed by the scope's object_format (40 for sha1, 64 for sha256)."
+    },
+    "head_commit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+      "description": "The change commit. Lowercase hex; its length is fixed by the scope's object_format (40 for sha1, 64 for sha256)."
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^(?!(?:.*\\/)?(?:[^/]*\\.|\\.[gG][iI][tT])(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*$",
+            "description": "Repository-relative path the change adds or modifies."
+          },
+          "mode": {
+            "type": "string",
+            "pattern": "^[0-7]{6}$",
+            "description": "Git file mode as six octal digits (100644 is the only mode a scope authorizes)."
+          },
+          "blob": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+            "description": "Blob object id the path holds after the change. Lowercase hex; its length is fixed by the scope's object_format (40 for sha1, 64 for sha256)."
+          }
+        },
+        "required": ["path", "mode", "blob"],
+        "additionalProperties": false,
+        "description": "One path the change adds or modifies."
+      },
+      "description": "Every path the change adds or modifies, sorted by path bytes, unique."
+    },
+    "tool_receipt_digests": {
+      "maxItems": 256,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "const": "sha-256",
+            "description": "Hash algorithm (a DigestAlgorithm)."
+          },
+          "value": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Lowercase hex SHA-256 digest (64 characters)."
+          }
+        },
+        "required": ["algorithm", "value"],
+        "additionalProperties": false,
+        "description": "A content digest: algorithm plus lowercase hex value."
+      },
+      "uniqueItems": true,
+      "description": "SHA-256 of the canonical JSON of each signed tool receipt in the bundle. Unique."
+    },
+    "system_prompt_digest": {
+      "type": "object",
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "sha-256",
+          "description": "Hash algorithm (a DigestAlgorithm)."
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 digest (64 characters)."
+        }
+      },
+      "required": ["algorithm", "value"],
+      "additionalProperties": false,
+      "description": "SHA-256 of the UTF-8 bytes of the system prompt the run used."
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The inference provider the run used (informational)."
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The model the run used (informational)."
+    },
+    "runtime_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The runtime version that ran the task (informational)."
+    }
+  },
+  "required": [
+    "spec",
+    "grant_id",
+    "grant_digest",
+    "tick_digest",
+    "scope_digest",
+    "repo",
+    "object_format",
+    "parent_commit",
+    "head_commit",
+    "entries",
+    "tool_receipt_digests",
+    "system_prompt_digest",
+    "provider",
+    "model",
+    "runtime_version"
+  ],
+  "additionalProperties": false
+}

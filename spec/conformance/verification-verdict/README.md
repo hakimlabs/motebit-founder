@@ -16,7 +16,7 @@ Axes:
 | `identityBinding` | `sovereign` \| `anchored` \| `pinned` \| `unverified` \| `invalid`                        |
 | `authority`       | `valid` \| `expired` \| `not_yet_valid` \| `insufficient` \| `unknown`                    |
 | `revocation`      | `{ status: "fresh" \| "stale" \| "unchecked" \| "revoked"; freshness?: { asOf, basis } }` |
-| `temporalBasis`   | `clockless` \| `local_clock` \| `ledger_anchored`                                         |
+| `temporalBasis`   | `clockless` \| `local_clock` \| `ledger_anchored` \| `operator_recorded`                  |
 | `evidenceBasis`   | `{ kind, ref }[]`                                                                         |
 | `repair?`         | `{ code, axis, summary, canonical?, fix }` — present on any non-passing axis              |
 

@@ -1,0 +1,68 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/repo-task-scope-v1.json",
+  "title": "RepoTaskScope (v1)",
+  "description": "The principal's detached scope for one repository task, bound into a StandingDelegation by subject_binding.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "motebit.repo-task-scope.v1",
+      "description": "Type tag read by verifySubjectBinding; equals the grant's subject_binding.artifact_schema."
+    },
+    "spec": {
+      "type": "string",
+      "const": "motebit/repo-task-scope@1.0",
+      "description": "Spec tag of this artifact."
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The repository the change lands in; compared byte-exact with the verifier's expected repository."
+    },
+    "base_ref": {
+      "type": "string",
+      "const": "main",
+      "description": "The protected branch the change lands on."
+    },
+    "object_format": {
+      "type": "string",
+      "enum": ["sha1", "sha256"],
+      "description": "Git object format of the repository; fixes the length of every object id."
+    },
+    "allowed_paths": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(?!(?:.*\\/)?(?:[^/]*\\.|\\.[gG][iI][tT])(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*$",
+        "description": "A path the change may add or modify, compared byte-exact with git's path bytes."
+      },
+      "uniqueItems": true,
+      "description": "Paths the change may add or modify. Unique."
+    },
+    "max_changed_files": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "The most entries one change may have."
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The task text the run starts from; the receipt's prompt_hash is hex SHA-256 of its UTF-8 bytes."
+    }
+  },
+  "required": [
+    "schema",
+    "spec",
+    "repo",
+    "base_ref",
+    "object_format",
+    "allowed_paths",
+    "max_changed_files",
+    "task"
+  ],
+  "additionalProperties": false
+}

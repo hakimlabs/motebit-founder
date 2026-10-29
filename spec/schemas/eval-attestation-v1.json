@@ -142,7 +142,8 @@
                   "succession",
                   "revocation",
                   "bond_commitment",
-                  "solvency_proof"
+                  "solvency_proof",
+                  "repo_change"
                 ],
                 "description": "What the verdict is about (the closed VerdictSubject union)."
               },
@@ -223,7 +224,7 @@
               },
               "temporalBasis": {
                 "type": "string",
-                "enum": ["clockless", "local_clock", "ledger_anchored"],
+                "enum": ["clockless", "local_clock", "ledger_anchored", "operator_recorded"],
                 "description": "The temporal basis time-dependent axes were evaluated against."
               },
               "evidenceBasis": {

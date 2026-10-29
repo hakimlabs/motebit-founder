@@ -389,3 +389,19 @@ export {
   SYNC_HOLD_RECEIPT_SCHEMA_ID,
   buildSyncHoldReceiptJsonSchema,
 } from "./sync-hold-receipt.js";
+
+export {
+  RepoTaskScopeSchema,
+  RepoChangeEntrySchema,
+  RepoChangeResultSchema,
+  RepoChangeBundleSchema,
+  RepoChangeExecutionReceiptSchema,
+  RepoChangeToolInvocationReceiptSchema,
+  REPO_PATH_PATTERN,
+  REPO_TASK_SCOPE_SCHEMA_ID,
+  REPO_CHANGE_RESULT_SCHEMA_ID,
+  REPO_CHANGE_BUNDLE_SCHEMA_ID,
+  buildRepoTaskScopeJsonSchema,
+  buildRepoChangeResultJsonSchema,
+  buildRepoChangeBundleJsonSchema,
+} from "./repo-change.js";

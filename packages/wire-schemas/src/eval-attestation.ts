@@ -132,6 +132,7 @@ export const VerificationVerdictSchema = z
         "revocation",
         "bond_commitment",
         "solvency_proof",
+        "repo_change",
       ])
       .describe("What the verdict is about (the closed VerdictSubject union)."),
     integrity: z
@@ -145,7 +146,7 @@ export const VerificationVerdictSchema = z
       .describe("Whether the authority covering the action holds. `unknown` is never a pass."),
     revocation: RevocationVerdictSchema,
     temporalBasis: z
-      .enum(["clockless", "local_clock", "ledger_anchored"])
+      .enum(["clockless", "local_clock", "ledger_anchored", "operator_recorded"])
       .describe("The temporal basis time-dependent axes were evaluated against."),
     evidenceBasis: z
       .array(EvidenceRefSchema)

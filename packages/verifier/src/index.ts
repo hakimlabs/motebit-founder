@@ -211,3 +211,35 @@ export {
 } from "@motebit/crypto";
 export type { VerifyRoutingTranscriptResult } from "@motebit/crypto";
 export type { RoutingDecisionTranscript, TranscriptCandidate } from "@motebit/protocol";
+
+// Governed repo change (spec/repo-change-v1.md) — the verifier CORE: a pure
+// function over a bundle and the inputs a caller computes from git (entries,
+// tracked paths, role-typed pins, the path predicate as data, strictly parsed
+// revocations, spent status, the mode's ancestry/shape results, evaluation
+// time). Returns a `VerificationVerdict` (`type: "repo_change"`) whose every
+// failure carries a repo-change repair code, the receipt's status as
+// `outcome`, and every failed rule in `diagnostics`.
+export { verifyRepoChange } from "./repo-change.js";
+export type {
+  VerifyRepoChangeInput,
+  RepoChangeVerification,
+  RepoChangeDiagnostics,
+  RepoChangeFailure,
+  RepoChangeComputedEntry,
+  RepoChangePin,
+  RepoChangePins,
+  RepoChangeRevocationSet,
+  RepoChangeMode,
+} from "./repo-change.js";
+export type {
+  RepoTaskScope,
+  RepoChangeResult,
+  RepoChangeEntry,
+  RepoChangeBundle,
+  RepoChangeExecutionReceipt,
+  RepoChangeToolInvocationReceipt,
+  RepoChangeRepairCode,
+  RepoChangeTool,
+  GitObjectFormat,
+} from "@motebit/protocol";
+export { ALL_REPO_CHANGE_REPAIR_CODES } from "@motebit/protocol";

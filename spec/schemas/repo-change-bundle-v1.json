@@ -1,0 +1,507 @@
+{
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/motebit/motebit/main/spec/schemas/repo-change-bundle-v1.json",
+  "title": "RepoChangeBundle (v1)",
+  "description": "The evidence bundle of one governed repo change. Its bytes MUST be exactly its canonical JSON (RFC 8785).",
+  "type": "object",
+  "properties": {
+    "spec": {
+      "type": "string",
+      "const": "motebit/repo-change-bundle@1.0",
+      "description": "Spec tag of the bundle."
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "motebit.repo-task-scope.v1",
+          "description": "Type tag read by verifySubjectBinding; equals the grant's subject_binding.artifact_schema."
+        },
+        "spec": {
+          "type": "string",
+          "const": "motebit/repo-task-scope@1.0",
+          "description": "Spec tag of this artifact."
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The repository the change lands in; compared byte-exact with the verifier's expected repository."
+        },
+        "base_ref": {
+          "type": "string",
+          "const": "main",
+          "description": "The protected branch the change lands on."
+        },
+        "object_format": {
+          "type": "string",
+          "enum": ["sha1", "sha256"],
+          "description": "Git object format of the repository; fixes the length of every object id."
+        },
+        "allowed_paths": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(?!(?:.*\\/)?(?:[^/]*\\.|\\.[gG][iI][tT])(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*$",
+            "description": "A path the change may add or modify, compared byte-exact with git's path bytes."
+          },
+          "uniqueItems": true,
+          "description": "Paths the change may add or modify. Unique."
+        },
+        "max_changed_files": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "The most entries one change may have."
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The task text the run starts from; the receipt's prompt_hash is hex SHA-256 of its UTF-8 bytes."
+        }
+      },
+      "required": [
+        "schema",
+        "spec",
+        "repo",
+        "base_ref",
+        "object_format",
+        "allowed_paths",
+        "max_changed_files",
+        "task"
+      ],
+      "additionalProperties": false,
+      "description": "The principal's detached scope for one repository task, bound into a StandingDelegation by subject_binding."
+    },
+    "grant": {
+      "type": "object",
+      "properties": {
+        "grant_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "UUID — the grant's stable handle; names the bundle and any revocation file."
+        },
+        "delegator_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Delegator's motebit identity — the entity granting standing authority."
+        },
+        "delegator_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Delegator's Ed25519 public key, hex-encoded (64 lowercase). Verifies `signature`. Embedded so verification needs no relay lookup."
+        },
+        "delegate_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Delegate's motebit identity — the entity authorized to mint per-tick tokens."
+        },
+        "delegate_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Delegate's Ed25519 public key, hex-encoded (64 lowercase). Per-tick tokens must name this same delegate."
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Comma-separated capability CEILING, or `*`. Each minted per-tick token's scope must narrow within this. Same grammar as DelegationToken.scope (market-v1 §12.3)."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Human-meaningful binding (e.g. `research:thesis=acme-q3`). Opaque to verification; carried for receipt-linkage and operator legibility."
+        },
+        "subject_binding": {
+          "description": "Optional (standing-delegation@1.1). Digest-binds the resolved subject-scope artifact this grant's authority reaches; part of the signed body, so the delegator's signature covers the resolved scope. Absent ⇒ a @1.0 grant with no signed resolved scope (higher-assurance consumers MUST fail closed). NOT the capability `scope`.",
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "motebit.subject-binding.v1",
+              "description": "This binding's own type tag (in-body domain separation)."
+            },
+            "artifact_schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Declared type of the detached artifact this digest addresses (e.g. `motebit.monitor-scope.v1`). The verifier MUST check the presented artifact's `schema` equals this, fail-closed."
+            },
+            "digest_method": {
+              "type": "string",
+              "const": "jcs-sha256-hex",
+              "description": "How `digest` was computed: `hex(SHA-256(canonicalJson(artifact)))`. A new hash is a new literal here, never a silent change. NOT a signature `suite`."
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "description": "`hex(SHA-256(canonicalJson(detached artifact)))`, 64 lowercase. Recompute from the artifact as received so JSON whitespace can't break the match."
+            }
+          },
+          "required": ["schema", "artifact_schema", "digest_method", "digest"],
+          "additionalProperties": false
+        },
+        "spend_ceiling": {
+          "description": "Optional (standing-delegation@1.2). The delegator's signed autonomous-spend ceiling — the HOW-MUCH this grant authorizes, as a cryptographic commitment (part of the signed body). Absent ⇒ the grant authorizes NO autonomous money (enforcers deny `ceiling_absent`, fail-closed) — a @1.0/@1.1 grant verifies unchanged and simply cannot move money.",
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "motebit.spend-ceiling.v1",
+              "description": "This ceiling's own type tag (in-body domain separation)."
+            },
+            "cumulative_limit_micro": {
+              "description": "Max cumulative spend (integer micro-USD, ≤ 2^53−1 for JCS number fidelity) within one rolling window. Requires `window_ms`. A SET value of 0 denies all positive spend on this dimension.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "per_counterparty_limit_micro": {
+              "description": "Max spend (integer micro-USD, ≤ 2^53−1) to any single canonical counterparty within one window. Requires `window_ms`. Counterparty canonicalization is consumer-local runtime law (spec §3.3).",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "max_action_count": {
+              "description": "Max number of money actions within one window (≤ 2^53−1). Requires `window_ms`.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "lifetime_limit_micro": {
+              "description": "Max cumulative spend (integer micro-USD, ≤ 2^53−1) over the grant's ENTIRE life — never reset by a window roll. The offline-meaningful total bound (paired with the grant's `expires_at`).",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "window_ms": {
+              "description": "Rolling window length in ms (≤ 2^53−1). Required (> 0) when any per-window limit is set.",
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": ["schema"],
+          "additionalProperties": false
+        },
+        "cadence_ms": {
+          "type": "number",
+          "description": "Authorized minimum firing interval, milliseconds. A per-tick rate limit enforced at mint/relay time — NOT a single-token verification rule."
+        },
+        "issued_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the grant was issued."
+        },
+        "not_before": {
+          "description": "Optional activation delay (Unix ms). Null ⇒ active from `issued_at`.",
+          "type": ["number", "null"]
+        },
+        "expires_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds after which the grant is invalid. Long-but-finite and renewable — NOT open-ended; the delegate renews by re-signing. See standing-delegation-v1 §6 D1."
+        },
+        "max_token_ttl_ms": {
+          "type": "number",
+          "description": "Ceiling on each minted token's `(expires_at - issued_at)`. Keeps per-tick tokens short-lived even though the grant lives long."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1`: JCS (RFC 8785), Ed25519, base64url signature, hex public keys."
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$",
+          "description": "Ed25519 signature, canonical unpadded base64url: 86 characters ending in A, Q, g or w."
+        }
+      },
+      "required": [
+        "grant_id",
+        "delegator_id",
+        "delegator_public_key",
+        "delegate_id",
+        "delegate_public_key",
+        "scope",
+        "subject",
+        "cadence_ms",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "max_token_ttl_ms",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "The principal's StandingDelegation to the agent."
+    },
+    "tick": {
+      "type": "object",
+      "properties": {
+        "delegator_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Delegator's motebit identity — UUIDv7 string. The entity authorizing the delegation."
+        },
+        "delegator_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Delegator's Ed25519 public key, hex-encoded (64 lowercase characters). Used to verify `signature`. Embedded so verification does not require a relay lookup."
+        },
+        "delegate_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Delegate's motebit identity — UUIDv7 string. The entity receiving the authorization."
+        },
+        "delegate_public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Delegate's Ed25519 public key, hex-encoded (64 lowercase characters). Binds the delegation to a specific cryptographic identity — a different keypair cannot exercise the token."
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Comma-separated capability list the delegate may invoke, or `*` for wildcard. Exhaustive match required at invocation time — absent capabilities are denied. See market-v1 §12.3."
+        },
+        "issued_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds when the token was issued."
+        },
+        "expires_at": {
+          "type": "number",
+          "description": "Unix timestamp in milliseconds after which the token is invalid. Verifiers reject tokens where `now > expires_at`."
+        },
+        "not_before": {
+          "description": "Optional activation time (Unix ms). Present ⇒ the token is INVALID before it — verifiers reject when `now < not_before`. Makes pre-minting honest: a standing grant's delegator can sign a future slot's tick at grant-creation, and it cannot verify until its slot. Absent ⇒ active from `issued_at` (today's behavior). standing-delegation@1.0 §3.",
+          "type": "number"
+        },
+        "grant_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "REQUIRED here: the grant this tick belongs to."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite identifier. Always `motebit-jcs-ed25519-b64-v1` for delegation tokens today: JCS canonicalization (RFC 8785), Ed25519 signature, base64url-encoded signature, hex-encoded public keys. See @motebit/protocol SUITE_REGISTRY."
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$",
+          "description": "Ed25519 signature, canonical unpadded base64url: 86 characters ending in A, Q, g or w."
+        }
+      },
+      "required": [
+        "delegator_id",
+        "delegator_public_key",
+        "delegate_id",
+        "delegate_public_key",
+        "scope",
+        "issued_at",
+        "expires_at",
+        "grant_id",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "The principal's per-tick DelegationToken under the grant."
+    },
+    "tool_receipts": {
+      "maxItems": 256,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "invocation_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Per-call identifier."
+          },
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The run's task_id; equals the ExecutionReceipt's."
+          },
+          "motebit_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Motebit identity."
+          },
+          "public_key": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Ed25519 public key, 64 lowercase hex characters."
+          },
+          "device_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Signing device identity."
+          },
+          "tool_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The tool the call named."
+          },
+          "started_at": {
+            "type": "number",
+            "description": "Unix ms the call started."
+          },
+          "completed_at": {
+            "type": "number",
+            "description": "Unix ms the call finished."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["completed", "failed", "denied"],
+            "description": "Terminal state (execution-ledger-v1 §11.1)."
+          },
+          "args_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Lowercase hex SHA-256 digest (64 characters)."
+          },
+          "result_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Lowercase hex SHA-256 digest (64 characters)."
+          },
+          "invocation_origin": {
+            "type": "string",
+            "enum": ["user-tap", "ai-loop", "scheduled", "agent-to-agent"],
+            "description": "How the act was authorized for invocation. Signature-bound."
+          },
+          "suite": {
+            "type": "string",
+            "const": "motebit-jcs-ed25519-b64-v1",
+            "description": "Cryptosuite: JCS, Ed25519, base64url signature, hex public key."
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$",
+            "description": "Ed25519 signature, canonical unpadded base64url: 86 characters ending in A, Q, g or w."
+          }
+        },
+        "required": [
+          "invocation_id",
+          "task_id",
+          "motebit_id",
+          "public_key",
+          "device_id",
+          "tool_name",
+          "started_at",
+          "completed_at",
+          "status",
+          "args_hash",
+          "result_hash",
+          "suite",
+          "signature"
+        ],
+        "additionalProperties": false,
+        "description": "A signed record of one tool call, in the repo-change profile."
+      },
+      "description": "Every tool receipt of the run."
+    },
+    "receipt": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The run's fresh task id."
+        },
+        "motebit_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Motebit identity."
+        },
+        "public_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Ed25519 public key, 64 lowercase hex characters."
+        },
+        "device_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Signing device identity."
+        },
+        "submitted_at": {
+          "type": "number",
+          "description": "Unix ms the run started."
+        },
+        "completed_at": {
+          "type": "number",
+          "description": "Unix ms the run ended."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["completed", "failed", "denied"],
+          "description": "Terminal state (execution-ledger-v1 §11.1)."
+        },
+        "result": {
+          "type": "string",
+          "description": "The change record (RepoChangeResult) as canonical JSON, for every status."
+        },
+        "tools_used": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of the tools the run used."
+        },
+        "memories_formed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Memories formed; a verifier requires 0."
+        },
+        "prompt_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex SHA-256 of the UTF-8 bytes of the scope's task."
+        },
+        "result_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Hex SHA-256 of the UTF-8 bytes of result."
+        },
+        "delegated_scope": {
+          "description": "The tick's scope. A verifier requires it, within the tick's scope.",
+          "type": "string"
+        },
+        "invocation_origin": {
+          "type": "string",
+          "enum": ["user-tap", "ai-loop", "scheduled", "agent-to-agent"],
+          "description": "How the act was authorized for invocation. Signature-bound."
+        },
+        "suite": {
+          "type": "string",
+          "const": "motebit-jcs-ed25519-b64-v1",
+          "description": "Cryptosuite: JCS, Ed25519, base64url signature, hex public key."
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$",
+          "description": "Ed25519 signature, canonical unpadded base64url: 86 characters ending in A, Q, g or w."
+        }
+      },
+      "required": [
+        "task_id",
+        "motebit_id",
+        "public_key",
+        "device_id",
+        "submitted_at",
+        "completed_at",
+        "status",
+        "result",
+        "tools_used",
+        "memories_formed",
+        "prompt_hash",
+        "result_hash",
+        "suite",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "description": "The agent's signed outcome, in the repo-change profile."
+    }
+  },
+  "required": ["spec", "scope", "grant", "tick", "tool_receipts", "receipt"],
+  "additionalProperties": false
+}

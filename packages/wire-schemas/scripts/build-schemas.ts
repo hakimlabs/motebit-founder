@@ -53,6 +53,11 @@ import {
   buildHostEnrollmentJsonSchema,
   buildHostRetirementJsonSchema,
 } from "../src/host-roster.js";
+import {
+  buildRepoTaskScopeJsonSchema,
+  buildRepoChangeResultJsonSchema,
+  buildRepoChangeBundleJsonSchema,
+} from "../src/repo-change.js";
 import { buildEvidenceProvenanceJsonSchema } from "../src/evidence-provenance.js";
 import { buildEvalAttestationJsonSchema } from "../src/eval-attestation.js";
 import { buildRoutingTranscriptJsonSchema } from "../src/routing-transcript.js";
@@ -157,6 +162,9 @@ const SCHEMAS: Array<{ filename: string; build: () => Record<string, unknown> }>
   { filename: "bond-commitment-v1.json", build: buildBondCommitmentJsonSchema },
   { filename: "host-enrollment-v1.json", build: buildHostEnrollmentJsonSchema },
   { filename: "host-retirement-v1.json", build: buildHostRetirementJsonSchema },
+  { filename: "repo-task-scope-v1.json", build: buildRepoTaskScopeJsonSchema },
+  { filename: "repo-change-v1.json", build: buildRepoChangeResultJsonSchema },
+  { filename: "repo-change-bundle-v1.json", build: buildRepoChangeBundleJsonSchema },
   { filename: "evidence-provenance-v1.json", build: buildEvidenceProvenanceJsonSchema },
   { filename: "eval-attestation-v1.json", build: buildEvalAttestationJsonSchema },
   { filename: "routing-transcript-v1.json", build: buildRoutingTranscriptJsonSchema },
