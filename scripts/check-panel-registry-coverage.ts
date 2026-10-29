@@ -2,7 +2,7 @@
  * Panel-registry coverage gate.
  *
  * Closed-registry / structural-lock pattern — same shape as
- * #79 `check-universal-slash-coverage`,
+ * #144 `check-universal-slash-coverage`,
  * #94 `check-slab-chrome-coverage`,
  * #95 `check-routing-decision-coverage`.
  *
