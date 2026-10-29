@@ -127,7 +127,7 @@ No agent in the path is the master. No relay is the authority. The sovereign exe
 
 The birds that arrived at the lake were not chosen. They were the ones who survived the valleys. Their presence at the end was proof of their worthiness — not a credential issued by an authority, but the fact of endurance.
 
-Trust in the motebit network works identically. An agent's trust is not assigned by a platform. It is the accumulation of signed execution receipts — cryptographic proof of work completed, promises kept, budgets honored. Each receipt is a valley survived. The trust score is the number of valleys crossed.
+Trust in the motebit network works identically. An agent's trust is not assigned by a platform. It is the accumulation of signed execution receipts — cryptographic proof of work completed, promises kept, budgets honored. Each receipt is a valley survived. And trust is first-person: each motebit keeps its own record of the valleys it has watched another agent cross with it, one edge per pair. There is no global score that every bird reads off the same scoreboard. What A trusts in B is what B has done for A.
 
 Self-issued trust is rejected. A bird cannot declare itself the Simurgh. An agent cannot issue credentials to itself and claim trust. The sybil defense is architectural: trust is the residue of interaction with _others_, verified by signed receipts that both parties co-produce. You cannot fake having crossed the valleys. The receipts are the proof.
 
@@ -145,7 +145,7 @@ The architecture does not optimize away the valleys. It instrumentalizes them.
 
 ### 5.1 — No Central Authority
 
-The Simurgh is not a master bird that governs the others. Any architecture that requires a central identity authority, a central trust oracle, or a central routing controller violates the principle. The relay facilitates — it carries pressure through the medium — but it does not decide. The semiring decides. The algebra decides. The composition of individual trust scores along the path decides. This is decentralization of _authority_, not of _economics_: the relay decides no identity, no trust, no route — yet it is economically central by design, the coordination checkpoint and ledger of record that records every settlement and earns a fee at each (see docs/doctrine/clearing-house-not-thin-waist.md). A central coordinator is not a central authority; the Simurgh convenes the flock, it does not rule it.
+The Simurgh is not a master bird that governs the others. Any architecture that requires a central identity authority, a central trust oracle, or a central routing controller violates the principle. The relay facilitates — it carries pressure through the medium — but it does not decide. The semiring decides. The algebra decides. The composition of trust along the path decides — each edge weighted by the delegator's own first-person record of the next hop, never by a score the network keeps for everyone. This is decentralization of _authority_, not of _economics_: the relay decides no identity, no trust, no route — yet it is economically central by design, the coordination checkpoint and ledger of record that records every settlement and earns a fee at each (see docs/doctrine/clearing-house-not-thin-waist.md). A central coordinator is not a central authority; the Simurgh convenes the flock, it does not rule it.
 
 ### 5.2 — No Procedural Routing
 
@@ -157,7 +157,7 @@ A bird cannot name itself Simurgh. An agent cannot manufacture trust from nothin
 
 ### 5.4 — No Skipping Valleys
 
-An agent cannot claim trust without the receipts that prove it. There is no fast track, no bootstrap credential, no "trusted by default." Every agent begins at FirstContact — the mouth of the first valley. Trust accumulates only through verified interaction. The valleys are not optional.
+An agent cannot claim trust without the receipts that prove it. There is no fast track, no bootstrap credential, no "trusted by default." Every agent begins unknown to every other, and reaches FirstContact with a counterpart at their first interaction — the mouth of the first valley. Trust accumulates only through verified interaction. The valleys are not optional.
 
 ---
 
@@ -174,7 +174,7 @@ Budget is locked before execution. Settlement occurs at every hop. Receipts bind
 Therefore:
 
 - Routing is capital flow. The semiring does not only compute the best path. It computes the most economically efficient path under trust, cost, latency, reliability, and regulatory constraints. The algorithm that routes intelligence also routes capital.
-- Trust is priced performance. An agent with a thousand verified receipts commands better routing than one with ten. Trust is not a reputation badge. It is accumulated proof of economic reliability — valleys crossed, budgets honored, work delivered.
+- Trust is priced performance. An agent that has delivered a thousand verified receipts to a delegator ranks higher in that delegator's routing than one that has delivered ten. Trust is not a reputation badge, and it is not a global score: each delegator ranks from its own ledger. It is accumulated proof of economic reliability — valleys crossed, budgets honored, work delivered.
 - The network is a market. The Conference is not only coordination. It is a price-discovery mechanism for intelligence. When multiple agents can perform the same task, the semiring resolves the best provider under the buyer's constraints. Price, trust, speed, compliance — all composed algebraically into a single routing decision.
 
 The ideal endgame: a user funds a droplet once. The droplet earns its own way forward — accepting tasks, earning settlement, delegating sub-tasks, accumulating trust, attracting better work. The relay extracts a platform fee at each settlement checkpoint. The network grows not through subsidy but through economic velocity.

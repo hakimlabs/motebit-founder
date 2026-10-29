@@ -4,7 +4,9 @@
 
 This is [`memory-never-confers-authority.md`](memory-never-confers-authority.md) one level out. That invariant says memory may inform but only a signed artifact authorizes money _movement_ (`verifiedGrant`); this one says peer JSON may inform but only an agent-owned binding authorizes money _destination_. Same shape, same reason: the thing that decides where value goes must be rooted in the sovereign's own key, not in a coordination layer that can lie.
 
-## The hole (verified from the bytes)
+## The hole (verified from the bytes, before Inc 1)
+
+This section describes the code as it stood before Inc 1; § "Status" below says what is enforced now.
 
 `settlement_address` is an unsigned, free-form base58 string. Its only integrity guarantee is that whoever wrote it held a bearer token for the `motebit_id` at write time. After that it is trusted unconditionally at every consumption point:
 
@@ -14,13 +16,13 @@ This is [`memory-never-confers-authority.md`](memory-never-confers-authority.md)
 
 The tell is an asymmetry already in the code: in the same federated-payment block, both relay treasuries are verified as `deriveSolanaAddress(relayIdentity.publicKey)` and `deriveSolanaAddress(peerRow.public_key)` — cryptographically pinned — while the **worker's** address is trusted as a string. A malicious federated peer both _supplies_ and _"verifies"_ the worker leg. This is the residual [`docs/doctrine/routing-decision-transcript.md`](routing-decision-transcript.md)'s sibling PR (the bond-signal-integrity fix) named as potentially existential and deliberately left open: a peer asserting a valid-but-lying candidate can redirect a worker's payments.
 
-The integrity-vs-binding split of [`identity-binding-verification.md`](identity-binding-verification.md) applies exactly: a discovered address has **integrity** (it is some string the writer set) but no **binding** (is this address really this agent's authorized payout?). Nothing checks the binding today, though the agent's `public_key` sits in the very same registry row.
+The integrity-vs-binding split of [`identity-binding-verification.md`](identity-binding-verification.md) applies exactly: a discovered address has **integrity** (it is some string the writer set) but no **binding** (is this address really this agent's authorized payout?). Before Inc 1 nothing checked the binding, though the agent's `public_key` sits in the very same registry row.
 
 ## The shape: two rungs, not a new gate
 
 Settlement authority is a ladder, additive like [`identity-binding-verification.md`](identity-binding-verification.md) and [`hardware-attestation.md`](hardware-attestation.md) — never a hard admission gate that bricks legacy agents. A discovered address resolves to a rung, and a payer acts on the rung honestly:
 
-- **unverified** — a raw string with no binding to the identity key. Today's default. A hint, never authority: a payer MUST NOT auto-settle to an unverified address (the interim rule _discoverable ≠ settlement-authorized_, made structural).
+- **unverified** — a raw string with no binding to the identity key. The default for any address that is not derived-bound. The target rule is that it is a hint, never authority: a payer MUST NOT auto-settle to an unverified address (the interim rule _discoverable ≠ settlement-authorized_, made structural). Today that rule holds only on the federated leg; a local candidate's address is paid on the relay's registry read (§ "Status").
 - **derived-bound** — `settlement_address === deriveSolanaAddress(agent.public_key)`. The address IS the identity key's Solana address, so the binding is **tautological and offline** — the same zero-trust shape as the commitment bond's `bonded_address === deriveSolanaAddress(bonded_public_key)` (`verifyBondCommitment`, `packages/crypto/src/artifacts.ts`) and the sovereign/`did:key` identity rung. Crucially, the reference agent runner already sets exactly this (`deriveSolanaAddress(identity.publicKey)` in `packages/molecule-runner/src/index.ts`), so the **common case is already bound** — the fix is to _check the equality_ the relay already computes for its own treasuries. No new artifact, no migration, closes the majority immediately.
 - **signed-bound** — for an agent that pays out to a wallet **distinct** from its identity key (custody separation, a cold payout wallet, the `sweep-config` override), a signed SettlementBinding artifact: the agent's identity key signs authorization of an arbitrary payout address within a validity window. Verified against the agent's key with succession/time-windowing (`verifyKeyBindingAtTime`, `packages/crypto/src/index.ts`) so a binding signed while key K was active keeps authorizing, and a forgery under a rotated-away or revoked key fails. Its strength composes with whatever identity-binding rung the signer key itself reaches (pinned/anchored/sovereign).
 
@@ -44,6 +46,15 @@ This subordinates the coordination layer exactly as `memory-never-confers-author
 
 **A derived-bound destination follows its key across a rotation.** A derived-bound address IS the key, so when a succession retires the key (an ordinary rotation or a guardian recovery), `applySuccession` (`services/relay/src/succession-apply.ts`) moves a `settlement_address` — and a listing `pay_to_address` — equal to the retired key's derived address to the new key's derived address, in the same transaction as the key. A custom (non-derived) address is not the key's and is left alone. An obligation ALREADY admitted to the retired address — a `pending` / `processing` withdrawal's destination, a P2P task's admitted worker-leg address — is never rewritten: that would be the relay creating destination authority, the move this doctrine forbids. The relay reports those instead (`openObligationsToKey`, `services/relay/src/rotation-obligations.ts`): served to the owner by `GET /api/v1/agents/:id/rotation-obligations`, and returned + logged by `applySuccession` as `open_obligations`. Its client-side twin: every rotation entry point reads the retiring key's wallet AND those obligations first and refuses while either shows value or cannot be read, unless the owner explicitly acknowledges (`checkRotationFunds`, `@motebit/encryption`; `readRotationObligations`, `@motebit/sync-engine`; surface-kit's I0). Deferred: the window between those reads and the erase, token-account rent and stake / nonce authorities held by the key, and an automatic sweep of the old address.
 
+## Status (what origin/main enforces)
+
+The payer side lives in `resolveP2pPaymentRequest` (`packages/runtime/src/relay-delegation.ts`):
+
+- **A federated candidate must derive-bind and sovereign-bind.** A candidate the origin marks as peer-hosted (`source_relay_public_key` set) is paid only when its `public_key` is present, the address derives from it (`isDerivedSolanaSettlement`), and the key sovereign-binds to its `motebit_id` (`verifySovereignBinding`). Otherwise the payer refuses with `worker_settlement_unbound` before broadcast. The relay's forward (`federatedP2pIntent`, `services/relay/src/tasks.ts`) runs the same check again before it records.
+- **A local candidate is trusted on the relay's registry read, which is unsigned.** For a local candidate the payer compares the discovered address with the `settlement_address` the `p2p-eligibility` pre-flight returns (`GET /api/v1/agents/:id/p2p-eligibility`, `services/relay/src/agents.ts`). That value is a plain JSON field read from `agent_registry`; the relay does not sign it. The payer therefore trusts its own relay, over the authenticated connection, for the local leg. No derived or signed binding is required there, by design (custody separation).
+- **An older relay that omits the field skips that check.** If the pre-flight returns `allowed: true` without `settlement_address`, the payer pays the discovered address with no registry comparison. The locality gate still refuses every peer-listed entry it cannot bind, so this gap is confined to candidates the origin stamped local.
+- **Only the derived rung (Inc 1) is built.** The `SettlementBinding` artifact (Inc 2), its producer and transport (Inc 3), and the check-settlement-authority gate (Inc 4) do not exist. A federated worker whose address is not its identity key's derived address cannot be paid P2P at all.
+
 ## Increments
 
 - **Inc 0 (this doc)** — the invariant, the two-rung ladder, the transport-not-create rule.
@@ -54,7 +65,7 @@ This subordinates the coordination layer exactly as `memory-never-confers-author
 
 ## Backward-compatibility
 
-Additive, the bond/sovereign-binding pattern. Legacy agents have an address but no binding: an address equal to `deriveSolanaAddress(public_key)` reads `derived-bound` immediately (the reference runner, and any honestly-configured agent, passes for free); an unequal legacy address reads `unverified` and degrades to hint-only for auto-settlement until the agent re-registers with a signed binding — it is never hard-failed out of discovery. The federation-transport half is safe to add at once (an omitted binding is simply `unverified`). The required-for-auto-settlement rung applies to newly-written addresses and money-moving paths, not to discovery or display.
+Additive, the bond/sovereign-binding pattern. Legacy agents have an address but no binding: an address equal to `deriveSolanaAddress(public_key)` reads `derived-bound` immediately (the reference runner, and any honestly-configured agent, passes for free); an unequal legacy address reads `unverified`. On the federated leg it is refused for P2P today, with no way out until the signed binding (Inc 2) exists; on the local leg it is still paid on the registry read. It is never hard-failed out of discovery. The federation-transport half is safe to add at once (an omitted binding is simply `unverified`). The required-for-auto-settlement rung applies to newly-written addresses and money-moving paths, not to discovery or display.
 
 ## Cross-cuts
 

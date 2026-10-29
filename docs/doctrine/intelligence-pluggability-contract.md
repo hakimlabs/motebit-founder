@@ -53,6 +53,8 @@ This is a **new gate**, distinct from the auto-router's deny channel ([`auto-rou
 
 The deny is honest, not silent. The chrome surfaces "this model's context window is too small for the full motebit runtime — choose a larger model or switch to Motebit Cloud" via the existing `routingNarration` slot.
 
+**Status: not built.** The ContextWindowTooSmallError named above does not exist in the code, and no surface measures the assembled prompt before invoking a provider. What exists is the field the gate would read — `ProviderCapability.contextWindowTokens` (`packages/protocol/src/routing.ts`), optional, and set by no producer today — and the mitigation for the witnessed failure: the web WebLLM engine is initialized with a 16,384-token window (`WEBLLM_CONTEXT_WINDOW_TOKENS`, `apps/web/src/providers.ts`). An over-long prompt still reaches the provider and fails with the provider's own error.
+
 ### 2. Model-aware prompt assembly
 
 System prompt assembly takes the provider's capability profile as input:
@@ -60,6 +62,8 @@ System prompt assembly takes the provider's capability profile as input:
 - Doctrine teaching blocks (PERCEPTION_DOCTRINE et al.) can compress under a declared `promptVerbosity` budget without dropping wire-field semantics.
 - Tool schemas can prune to the consumer's active tier set when total budget pressure demands it.
 - `trimConversation` in `packages/ai-core/src/context-window.ts` reserves the system-prompt + tool budget instead of treating them as free.
+
+**Status: not built.** Prompt assembly does not take a capability profile today, and `trimConversation` reserves only `reserveForResponse`; the system prompt and tool schemas are still treated as free. The only control in place is the static `SYSTEM_PROMPT_BUDGET_BYTES` ceiling in `packages/ai-core/src/prompt.ts`, enforced by `check-prompt-budget` (#103).
 
 The shape of "compression" is not arbitrary truncation — it is removing rule-shaped conformance clauses (per `runtime-invariants-over-prompt-rules.md`) while preserving the typed-truth wire-field teachings that the runtime cannot enforce. This is the same five-question audit, parameterized by model.
 
@@ -86,7 +90,7 @@ Two complementary gates, sibling not collision:
 | Gate                         | Lens                     | What it counts                               | Fires on                                           |
 | ---------------------------- | ------------------------ | -------------------------------------------- | -------------------------------------------------- |
 | `check-prompt-density` (#81) | Rule-clause accumulation | Bullet + numbered RULES lines in `prompt.ts` | Growth above measured BASELINE                     |
-| `check-prompt-budget` (new)  | Byte/token weight        | Static prefix size of `prompt.ts`            | Growth above declared `SYSTEM_PROMPT_BUDGET_BYTES` |
+| `check-prompt-budget` (#103) | Byte/token weight        | Static prefix size of `prompt.ts`            | Growth above declared `SYSTEM_PROMPT_BUDGET_BYTES` |
 
 Density catches conformance-shape drift (the runtime-invariants violation). Budget catches absolute-size drift (the pluggability violation). A prompt that adds three new bullets within the existing token budget trips density only. A prompt that adds 1,200 tokens of non-bullet prose trips budget only. Both gates are needed because both failure modes exist.
 
@@ -106,19 +110,21 @@ Pre-doctrine (witnessed 2026-05-17):
 4. `buildSystemPrompt` assembles ~6.5k tokens of static prefix + ~2k tokens of tools + ~1k tokens of packed context.
 5. WebLLM rejects at 8,484 tokens vs 4,096 window. User sees a developer-shaped error message.
 
-Post-doctrine:
+Today (only step 1 is shipped):
 
-1. Same selection. The WebLLM engine is initialized with `context_window_size: 16384` (model supports up to 128K; WebLLM's default was the cap, not the model's).
+1. Same selection. The WebLLM engine is initialized with `context_window_size: 16384` (model supports up to 128K; WebLLM's default was the cap, not the model's). The prompt now fits, so the turn proceeds. Same invariants as Sonnet — identity, policy, receipts, sensitivity, tool dispatch are byte-identical.
+
+Target, once commitment 1 is built (steps 2–4 are not built):
+
 2. `ProviderCapability.contextWindowTokens: 16384` declared on the capability profile.
 3. WebApp performs admission: assembled prompt + reserve ≤ 16384 → admitted.
-4. The runtime proceeds. Same invariants as Sonnet — identity, policy, receipts, sensitivity, tool dispatch are byte-identical. The model has less doctrine-prose to absorb, but the runtime is constant.
-5. If a future model declares `contextWindowTokens: 4096` and the floor isn't met, admission emits typed-failure → chrome renders calm-software message → user picks a larger model.
+4. If a model declares `contextWindowTokens: 4096` and the floor isn't met, admission emits typed-failure → chrome renders calm-software message → user picks a larger model.
 
 ## What this doctrine deliberately does NOT specify
 
 - **The minimum context-window floor.** Today's floor is a function of `prompt.ts` size + tool count + state pack. As `PERCEPTION_DOCTRINE` shrinks (commitment 3), the floor drops. Naming a fixed number here would ossify a soft-decay target.
 - **Per-model prompt variants.** Compression is not "different prompts per model." It is **one prompt assembly function** parameterized by model capability. Variants would re-introduce the lite-motebit trap.
-- **Routing-policy for admission failure.** Whether the consumer should fall back to a different provider when admission fails (e.g., automatically swap to Cloud) is a consumer-side policy decision, not a doctrine-level law. The doctrine guarantees the typed-failure exists; what to do with it belongs to the consumer.
+- **Routing-policy for admission failure.** Whether the consumer should fall back to a different provider when admission fails (e.g., automatically swap to Cloud) is a consumer-side policy decision, not a doctrine-level law. The doctrine requires the typed failure to exist (it is not built yet; see commitment 1's status); what to do with it belongs to the consumer.
 
 ## Cross-cuts
 
