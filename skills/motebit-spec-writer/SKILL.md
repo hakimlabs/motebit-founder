@@ -25,8 +25,8 @@ motebit:
     minimum_score: 0
   signature:
     suite: motebit-jcs-ed25519-b64-v1
-    public_key: 06d8b0b2d5a9776b1d650197fe6aa59da68050b8296ec2c0ff8da499217fd9e5
-    value: 68jvbaFsouSbB0uElurmtfmVxCiFDPpKEpwy1EFo4kJPIeJFq-rgwGvHdsmmNQLNF6Il8zYA6-1Xb3tExUbtDg
+    public_key: 1d97a12d52cdfac0cafd7126a241bd404e3c35c520d978846fa068aab5c915ae
+    value: r19PK-N9x-kH3LiTho_1bWyYTfkYThPDg-qwXMxJEro2a42Qu6t0w1esuTXzY6lKfItHY81eSFlEOMGIcMnXCg
 ---
 # Motebit Spec Writer
 
@@ -88,7 +88,7 @@ motebit spec template.
 ## Pitfalls
 
 - **Don't ship a wire-format type without the protocol export.**
-  `check-spec-coverage` (drift gate #19) iterates every spec for
+  `check-spec-coverage` (drift gate #9) iterates every spec for
   `#### Wire format (foundation law)` blocks and asserts each typename
   exports from `@motebit/protocol`. Adding a type to a spec without
   a corresponding interface in `packages/protocol/src/<spec>.ts` is a

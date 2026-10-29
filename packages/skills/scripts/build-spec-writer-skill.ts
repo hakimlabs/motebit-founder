@@ -96,7 +96,7 @@ motebit spec template.
 ## Pitfalls
 
 - **Don't ship a wire-format type without the protocol export.**
-  \`check-spec-coverage\` (drift gate #19) iterates every spec for
+  \`check-spec-coverage\` (drift gate #9) iterates every spec for
   \`#### Wire format (foundation law)\` blocks and asserts each typename
   exports from \`@motebit/protocol\`. Adding a type to a spec without
   a corresponding interface in \`packages/protocol/src/<spec>.ts\` is a
