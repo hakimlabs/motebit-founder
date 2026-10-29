@@ -306,7 +306,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "integrity: tick signature check removed",
     `${INT} a tick whose signature does not verify is rejected`,
-    off('  if (structural.integrity !== "verified") {'),
+    off("  if (!tickSigned) {"),
   ),
   entry(
     "integrity: execution receipt signature check removed",
@@ -542,7 +542,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "authority: tick insufficiency not mapped",
     `${AUT} a tick whose TTL exceeds the grant's max_token_ttl_ms is insufficient`,
-    off('  if (structural.authority !== "valid") {'),
+    off("  if (tick.expires_at - tick.issued_at > grant.max_token_ttl_ms) {"),
   ),
   entry(
     "authority: unavailable time not reported",
@@ -555,20 +555,79 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "authority: tick not judged structurally when time is unavailable",
     `${AUT} with no acceptable time, a structurally invalid tick still reads insufficient`,
-    off('  if (structural.authority !== "valid") {'),
+    off("  if (tick.expires_at - tick.issued_at > grant.max_token_ttl_ms) {"),
   ),
-  ...[
-    "a TTL over max_token_ttl_ms",
-    "a grant_id of another grant",
-    "a delegator other than the grant's",
-    "a scope wider than the grant's",
-  ].flatMap((breach) =>
+  ...(
+    [
+      [
+        "a TTL over max_token_ttl_ms",
+        off("  if (tick.expires_at - tick.issued_at > grant.max_token_ttl_ms) {"),
+      ],
+      ["a grant_id of another grant", off("  if (tick.grant_id !== grant.grant_id) {")],
+      [
+        "a delegator other than the grant's",
+        edit(
+          "    tick.delegator_id !== grant.delegator_id ||\n    tick.delegator_public_key !== grant.delegator_public_key\n",
+          "    (false as boolean)\n",
+        ),
+      ],
+      ["a scope wider than the grant's", off("  if (!isScopeNarrowed(grant.scope, tick.scope)) {")],
+    ] as const
+  ).flatMap(([breach, cut]) =>
     ["before the grant starts", "before the tick starts"].map((timing) =>
       entry(
-        `authority: structural tick check removed (${breach}, ${timing})`,
+        `authority: structural tick sub-check removed (${breach}, ${timing})`,
         `${AUT} a structural tick failure outranks a time before the window ${breach}, evaluated ${timing}, reads insufficient`,
-        off('  if (structural.authority !== "valid") {'),
+        cut,
       ),
+    ),
+  ),
+  entry(
+    "authority: tick delegator id not compared with the grant's",
+    `${AUT} a structural tick failure outranks a time before the window a delegator other than the grant's, evaluated before the grant starts, reads insufficient`,
+    edit(
+      "    tick.delegator_id !== grant.delegator_id ||\n    tick.delegator_public_key !== grant.delegator_public_key\n",
+      "    tick.delegator_public_key !== grant.delegator_public_key\n",
+    ),
+  ),
+  entry(
+    "authority: tick delegator key not compared with the grant's",
+    `${AUT} a tick under another delegator key (signed by that key) is not a tick of the grant`,
+    edit(
+      "    tick.delegator_id !== grant.delegator_id ||\n    tick.delegator_public_key !== grant.delegator_public_key\n",
+      "    tick.delegator_id !== grant.delegator_id\n",
+    ),
+  ),
+  entry(
+    "authority: tick delegate id not compared with the grant's",
+    `${IDB} a tick naming another delegate is not a tick of the grant`,
+    edit(
+      "    tick.delegate_id !== grant.delegate_id ||\n    tick.delegate_public_key !== grant.delegate_public_key\n",
+      "    tick.delegate_public_key !== grant.delegate_public_key\n",
+    ),
+  ),
+  entry(
+    "authority: tick delegate key not compared with the grant's",
+    `${AUT} a tick naming another delegate key is not a tick of the grant`,
+    edit(
+      "    tick.delegate_id !== grant.delegate_id ||\n    tick.delegate_public_key !== grant.delegate_public_key\n",
+      "    tick.delegate_id !== grant.delegate_id\n",
+    ),
+  ),
+  entry(
+    "authority: in-window fallback for a grant that does not verify removed",
+    `${INT} a grant whose signature does not verify confers no authority either`,
+    edit(
+      '    wallClock.authority !== "valid" &&\n',
+      '    (false as boolean) &&\n    wallClock.authority !== "valid" &&\n',
+    ),
+  ),
+  entry(
+    "authority: in-window fallback reports a structural fault twice",
+    `${IDB} a tick naming another delegate is not a tick of the grant`,
+    edit(
+      '    !failures.some((f) => f.code === "authority.repo_change.tick_insufficient")\n',
+      "    (true as boolean)\n",
     ),
   ),
   entry(

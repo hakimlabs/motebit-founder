@@ -26,8 +26,10 @@ import {
   fromBase64Url,
   hash,
   hexToBytes,
+  isScopeNarrowed,
   subjectBindingDigest,
   toBase64Url,
+  verifyDelegation,
   verifyDelegationRevocation,
   verifyDelegationTokenVerdict,
   verifyExecutionReceipt,
@@ -996,19 +998,14 @@ export async function verifyRepoChange(
   });
   if (!grantSigned)
     fail("integrity.repo_change.signature_invalid", "the grant's signature does not verify");
-  // The tick is judged STRUCTURALLY first, independent of any clock (ordering
-  // mode: grant_id, parties, scope narrowing, TTL, the grant at the tick's own
-  // slot), so a structural failure is never masked by a temporal one. The
-  // wall-clock verdict is computed only at an accepted time, for the window.
-  const structural = await verifyDelegationTokenVerdict(tick, grant, {
-    now: tick.issued_at,
-    temporalMode: "ordering",
-  });
+  // The tick's own signature, clockless (its window is the authority axis).
+  const tickSigned = await verifyDelegation(tick, { checkExpiry: false });
+  // The wall-clock verdict is computed only at an accepted time, for the window.
   const wallClock =
     now === null
       ? null
       : await verifyDelegationTokenVerdict(tick, grant, { now, temporalMode: "wall_clock" });
-  if (structural.integrity !== "verified") {
+  if (!tickSigned) {
     fail("integrity.repo_change.signature_invalid", "the tick's signature does not verify");
   }
   const receiptSigned =
@@ -1211,8 +1208,31 @@ export async function verifyRepoChange(
   if (tick.issued_at < grant.issued_at) {
     fail("authority.repo_change.tick_predates_grant", "tick.issued_at < grant.issued_at");
   }
-  if (structural.authority !== "valid") {
-    fail("authority.repo_change.tick_insufficient", "the tick is not a valid tick of the grant");
+  // The tick's STRUCTURE, judged from its own properties against the grant and
+  // independent of any clock, so a structural failure is never masked by a
+  // temporal one. Deliberately NOT crypto's grant-at-the-tick's-slot step: the
+  // grant is judged at the evaluation time (standing-delegation-v1 §4), so a
+  // pre-minted tick whose slot precedes the grant's not_before stays valid.
+  if (tick.grant_id !== grant.grant_id) {
+    fail("authority.repo_change.tick_insufficient", "tick.grant_id is not the grant's");
+  }
+  if (
+    tick.delegator_id !== grant.delegator_id ||
+    tick.delegator_public_key !== grant.delegator_public_key
+  ) {
+    fail("authority.repo_change.tick_insufficient", "the tick's delegator is not the grant's");
+  }
+  if (
+    tick.delegate_id !== grant.delegate_id ||
+    tick.delegate_public_key !== grant.delegate_public_key
+  ) {
+    fail("authority.repo_change.tick_insufficient", "the tick's delegate is not the grant's");
+  }
+  if (!isScopeNarrowed(grant.scope, tick.scope)) {
+    fail("authority.repo_change.tick_insufficient", "the tick's scope is wider than the grant's");
+  }
+  if (tick.expires_at - tick.issued_at > grant.max_token_ttl_ms) {
+    fail("authority.repo_change.tick_insufficient", "the tick's TTL exceeds max_token_ttl_ms");
   }
   // Temporal checks follow; a structural `insufficient` above still outranks
   // whatever they report (finish()).
@@ -1232,10 +1252,17 @@ export async function verifyRepoChange(
       "authority.repo_change.tick_not_yet_valid",
       "the tick was not yet valid (issued_at or not_before) at the evaluation time",
     );
-  } else if (wallClock.authority !== "valid") {
-    // Structurally valid, inside both windows, yet refused at this time:
-    // fail closed.
-    fail("authority.repo_change.tick_insufficient", "the tick is not valid at the evaluation time");
+  } else if (
+    wallClock.authority !== "valid" &&
+    !failures.some((f) => f.code === "authority.repo_change.tick_insufficient")
+  ) {
+    // Inside both windows, structure sound, yet crypto refuses the tick at
+    // this time: the grant itself does not verify (e.g. its signature). Fail
+    // closed, once — a structural fault above already reported this.
+    fail(
+      "authority.repo_change.tick_insufficient",
+      "the grant does not verify at the evaluation time",
+    );
   }
   if (tick.expires_at > grant.expires_at) {
     fail("authority.repo_change.tick_outlives_grant", "tick.expires_at > grant.expires_at");

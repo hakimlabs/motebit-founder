@@ -677,6 +677,14 @@ describe("verifyRepoChange integrity", () => {
     expectRule(r, "integrity.repo_change.signature_invalid", "grant's signature");
   });
 
+  it("a grant whose signature does not verify confers no authority either", async () => {
+    const r = await run({ grantSigned: (g) => void (g.max_token_ttl_ms = 2 * HOUR) });
+    expectRule(r, "authority.repo_change.tick_insufficient", "grant does not verify");
+    expect(r.verdict.authority).toBe("insufficient");
+    // Reported once, not once per path.
+    expect(codes(r).filter((c) => c === "authority.repo_change.tick_insufficient")).toHaveLength(1);
+  });
+
   it("a tick whose signature does not verify is rejected", async () => {
     const r = await run({ tickSigned: (t) => void (t.issued_at = t.issued_at + 1) });
     expectRule(r, "integrity.repo_change.signature_invalid", "tick's signature");
@@ -908,6 +916,13 @@ describe("verifyRepoChange identityBinding", () => {
     const r = await run({ tick: (t) => void (t.delegate_id = "agent-b") });
     expectRule(r, "identity.repo_change.signer_not_delegate", "tick's delegate");
   });
+
+  it("a tick naming another delegate is not a tick of the grant", async () => {
+    const r = await run({ tick: (t) => void (t.delegate_id = "agent-b") });
+    expectRule(r, "authority.repo_change.tick_insufficient", "tick's delegate is not the grant's");
+    // One structural report; the in-window fallback stays silent.
+    expect(codes(r).filter((c) => c === "authority.repo_change.tick_insufficient")).toHaveLength(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -931,7 +946,7 @@ describe("verifyRepoChange authority", () => {
 
   it("a tick whose TTL exceeds the grant's max_token_ttl_ms is insufficient", async () => {
     const r = await run({ tick: (t) => void (t.expires_at = T0 + 2 * HOUR) });
-    expectRule(r, "authority.repo_change.tick_insufficient", "not a valid tick of the grant");
+    expectRule(r, "authority.repo_change.tick_insufficient", "TTL exceeds");
     expect(r.verdict.authority).toBe("insufficient");
   });
 
@@ -1126,6 +1141,54 @@ describe("verifyRepoChange authority", () => {
         void (i.mode = { kind: "pull_request", shapeFailures: [], now: T0 + 150 * MIN }),
     });
     expectRule(r, "authority.repo_change.tick_expired");
+  });
+
+  it("a tick under another delegator key (signed by that key) is not a tick of the grant", async () => {
+    const r = await run({
+      tickSigner: (k) => k.x,
+      tick: (t) => void (t.delegator_public_key = bytesToHex(keys!.x.publicKey)),
+    });
+    expectRule(r, "authority.repo_change.tick_insufficient", "tick's delegator is not the grant's");
+  });
+
+  it("a tick naming another delegate key is not a tick of the grant", async () => {
+    const r = await run({
+      tick: (t) => void (t.delegate_public_key = bytesToHex(keys!.x.publicKey)),
+    });
+    expectRule(r, "authority.repo_change.tick_insufficient", "tick's delegate is not the grant's");
+  });
+
+  describe("a pre-minted tick whose slot precedes the grant's not_before", () => {
+    it("b1: is valid once the evaluation time is inside both windows", async () => {
+      const r = await run({
+        grant: (g) => void (g.not_before = T0 + 30 * MIN),
+        input: (i) =>
+          void (i.mode = { kind: "pull_request", shapeFailures: [], now: T0 + 40 * MIN }),
+      });
+      expect(r.diagnostics.failures).toEqual([]);
+      expect(isFullyVerified(r.verdict)).toBe(true);
+    });
+
+    it("b4: reads not_yet_valid before the grant's not_before", async () => {
+      const r = await run({ grant: (g) => void (g.not_before = T0 + 30 * MIN) });
+      expectRule(r, "authority.repo_change.grant_not_yet_valid");
+      expect(r.verdict.authority).toBe("not_yet_valid");
+    });
+
+    it("b5: a tick not_before before the grant's, issued after it, is valid inside both windows", async () => {
+      const r = await run({
+        grant: (g) => void (g.not_before = T0 + 30 * MIN),
+        tick: (t) => {
+          t.not_before = T0 + 20 * MIN;
+          t.issued_at = T0 + 35 * MIN;
+          t.expires_at = T0 + 90 * MIN;
+        },
+        input: (i) =>
+          void (i.mode = { kind: "pull_request", shapeFailures: [], now: T0 + 40 * MIN }),
+      });
+      expect(r.diagnostics.failures).toEqual([]);
+      expect(isFullyVerified(r.verdict)).toBe(true);
+    });
   });
 
   it("a tick that outlives its grant is insufficient", async () => {
