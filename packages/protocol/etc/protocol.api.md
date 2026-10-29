@@ -400,6 +400,9 @@ export const ALL_EVAL_KINDS: readonly EvalKind[];
 export const ALL_EVENT_TYPES: readonly EventType[];
 
 // @public
+export const ALL_GIT_OBJECT_FORMATS: readonly GitObjectFormat[];
+
+// @public
 export const ALL_MEMORY_SOURCES: readonly MemorySource[];
 
 // @public
@@ -407,6 +410,12 @@ export const ALL_MERKLE_TREE_VERSIONS: readonly MerkleTreeVersion[];
 
 // @public (undocumented)
 export const ALL_PROJECTION_CLASSES: readonly ProjectionClass[];
+
+// @public
+export const ALL_REPO_CHANGE_REPAIR_CODES: readonly RepoChangeRepairCode[];
+
+// @public
+export const ALL_REPO_CHANGE_TOOLS: readonly RepoChangeTool[];
 
 // @public (undocumented)
 export const ALL_RUN_EVIDENCE_WITHHELD_REASONS: readonly RunEvidenceWithheldReason[];
@@ -2138,6 +2147,12 @@ export function getSuiteEntry(id: SuiteId): SuiteEntry;
 export function getSuiteEntry(id: string): SuiteEntry | undefined;
 
 // @public
+export const GIT_OBJECT_ID_HEX_LENGTH: Readonly<Record<GitObjectFormat, number>>;
+
+// @public
+export type GitObjectFormat = "sha1" | "sha256";
+
+// @public
 export const GOAL_LIST_ARTIFACT: ContentArtifactType;
 
 // @public
@@ -3516,6 +3531,94 @@ export interface RepairInstruction {
     summary: string;
 }
 
+// @public
+export const REPO_CHANGE_BUNDLE_SPEC_ID: "motebit/repo-change-bundle@1.0";
+
+// @public
+export const REPO_CHANGE_MAX_GRANT_LIFETIME_MS = 86400000;
+
+// @public
+export const REPO_CHANGE_MAX_TOOL_RECEIPTS = 256;
+
+// @public
+export const REPO_CHANGE_SPEC_ID: "motebit/repo-change@1.0";
+
+// @public
+export const REPO_CHANGE_SUBJECT: "repo-change";
+
+// @public
+export const REPO_TASK_BASE_REF: "main";
+
+// @public
+export const REPO_TASK_SCOPE_SCHEMA: "motebit.repo-task-scope.v1";
+
+// @public
+export const REPO_TASK_SCOPE_SPEC_ID: "motebit/repo-task-scope@1.0";
+
+// @public
+export interface RepoChangeBundle {
+    readonly grant: StandingDelegation;
+    readonly receipt: RepoChangeExecutionReceipt;
+    readonly scope: RepoTaskScope;
+    readonly spec: typeof REPO_CHANGE_BUNDLE_SPEC_ID;
+    readonly tick: DelegationToken;
+    readonly tool_receipts: readonly RepoChangeToolInvocationReceipt[];
+}
+
+// @public
+export interface RepoChangeEntry {
+    readonly blob: string;
+    readonly mode: string;
+    readonly path: string;
+}
+
+// @public
+export type RepoChangeExecutionReceipt = Omit<ExecutionReceipt, "public_key" | "delegation_receipts" | "relay_task_id" | "service_result_hash" | "source_digest" | "source_projection" | "source_projection_class"> & {
+    readonly public_key: string;
+};
+
+// @public
+export type RepoChangeRepairCode = "integrity.repo_change.bundle_malformed" | "integrity.repo_change.bundle_not_canonical" | "integrity.repo_change.value_not_canonical" | "integrity.repo_change.signature_invalid" | "integrity.repo_change.result_hash_mismatch" | "integrity.repo_change.result_malformed" | "integrity.repo_change.result_not_canonical" | "integrity.repo_change.scope_binding_mismatch" | "integrity.repo_change.grant_id_mismatch" | "integrity.repo_change.grant_digest_mismatch" | "integrity.repo_change.tick_digest_mismatch" | "integrity.repo_change.scope_digest_mismatch" | "integrity.repo_change.scope_reference_mismatch" | "integrity.repo_change.prompt_hash_mismatch" | "integrity.repo_change.tool_receipts_mismatch" | "integrity.repo_change.task_id_mismatch" | "integrity.repo_change.shape_check_failed" | "identity.repo_change.delegator_not_principal" | "identity.repo_change.delegate_not_agent" | "identity.repo_change.delegator_is_delegate" | "identity.repo_change.signer_not_delegate" | "authority.repo_change.tick_expired" | "authority.repo_change.tick_not_yet_valid" | "authority.repo_change.tick_insufficient" | "authority.repo_change.tick_outlives_grant" | "authority.repo_change.time_unavailable" | "authority.repo_change.subject_binding_absent" | "authority.repo_change.subject_binding_wrong_schema" | "authority.repo_change.subject_wrong" | "authority.repo_change.scope_tools_outside" | "authority.repo_change.lifetime_exceeded" | "authority.repo_change.spend_ceiling_present" | "authority.repo_change.cadence_below_lifetime" | "authority.repo_change.repo_mismatch" | "authority.repo_change.grant_spent" | "authority.repo_change.delegated_scope_outside" | "authority.repo_change.tools_used_outside" | "authority.repo_change.tool_receipt_outside_scope" | "authority.repo_change.tools_used_mismatch" | "authority.repo_change.memories_formed" | "authority.repo_change.scope_path_not_permitted" | "authority.repo_change.entry_not_add_or_modify" | "authority.repo_change.entry_symlink" | "authority.repo_change.entry_submodule" | "authority.repo_change.entry_mode" | "authority.repo_change.entry_binary" | "authority.repo_change.entry_case_collision" | "authority.repo_change.entry_path_not_allowed" | "authority.repo_change.entry_path_not_permitted" | "authority.repo_change.entries_exceed_max" | "authority.repo_change.entries_mismatch" | "revocation.repo_change.revoked" | "revocation.repo_change.unchecked" | "revocation.repo_change.set_malformed";
+
+// @public
+export interface RepoChangeResult {
+    readonly entries: readonly RepoChangeEntry[];
+    readonly grant_digest: DigestRef;
+    readonly grant_id: string;
+    readonly head_commit: string;
+    readonly model: string;
+    readonly object_format: GitObjectFormat;
+    readonly parent_commit: string;
+    readonly provider: string;
+    readonly repo: string;
+    readonly runtime_version: string;
+    readonly scope_digest: DigestRef;
+    readonly spec: typeof REPO_CHANGE_SPEC_ID;
+    readonly system_prompt_digest: DigestRef;
+    readonly tick_digest: DigestRef;
+    readonly tool_receipt_digests: readonly DigestRef[];
+}
+
+// @public
+export type RepoChangeTool = "repo_read_blob" | "repo_write_path";
+
+// @public
+export type RepoChangeToolInvocationReceipt = Omit<ToolInvocationReceipt, "public_key"> & {
+    readonly public_key: string;
+};
+
+// @public
+export interface RepoTaskScope {
+    readonly allowed_paths: readonly string[];
+    readonly base_ref: typeof REPO_TASK_BASE_REF;
+    readonly max_changed_files: number;
+    readonly object_format: GitObjectFormat;
+    readonly repo: string;
+    readonly schema: typeof REPO_TASK_SCOPE_SCHEMA;
+    readonly spec: typeof REPO_TASK_SCOPE_SPEC_ID;
+    readonly task: string;
+}
+
 // @public (undocumented)
 export interface ReputationCredentialSubject {
     // (undocumented)
@@ -4634,7 +4737,7 @@ export const TASK_SUBMIT_AUDIENCE: TokenAudience;
 export type TaskShape = "quick" | "chat" | "reasoning" | "code" | "research" | "creative" | "math";
 
 // @public
-export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
+export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored" | "operator_recorded";
 
 // @public
 export function toCents(dollars: number): number;
@@ -5129,7 +5232,7 @@ export const VC_TYPE_REPUTATION = "AgentReputationCredential";
 export const VC_TYPE_TRUST = "AgentTrustCredential";
 
 // @public
-export type VerdictSubject = "identity" | "receipt" | "tool-invocation" | "credential" | "presentation" | "skill" | "unknown" | "delegation_token" | "succession" | "revocation" | "bond_commitment" | "solvency_proof";
+export type VerdictSubject = "identity" | "receipt" | "tool-invocation" | "credential" | "presentation" | "skill" | "unknown" | "delegation_token" | "succession" | "revocation" | "bond_commitment" | "solvency_proof" | "repo_change";
 
 // @public
 export interface VerificationVerdict {

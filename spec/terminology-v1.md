@@ -199,6 +199,22 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Standard:** JWT-shaped claims (RFC 7519); the admission semantics are novel.
 - **Forbidden synonyms:** dispatch token (in new identifiers), ticket, voucher, pass.
 
+### 5.6 RepoTaskScope
+
+- **Definition:** a principal's unsigned, detached statement of what one repository task may change: the repository, the protected branch (`main`), the git object format, the exact `allowed_paths`, `max_changed_files`, and the `task` text. It authorizes nothing alone; a `StandingDelegation` binds it by `subject_binding` (`artifact_schema: "motebit.repo-task-scope.v1"`), so the grant's signature reaches it.
+- **Layer:** protocol (`RepoTaskScope`, `REPO_TASK_SCOPE_SCHEMA`, `REPO_TASK_SCOPE_SPEC_ID`).
+- **Wire:** `spec/schemas/repo-task-scope-v1.json`; `spec: "motebit/repo-task-scope@1.0"`, `schema: "motebit.repo-task-scope.v1"`. See [`repo-change-v1.md`](repo-change-v1.md) §3.1.
+- **Standard:** novel.
+- **Forbidden synonyms:** permission, policy, allowlist, manifest (reserved suffix).
+
+### 5.7 RepoChangeTool
+
+- **Definition:** the closed set of capability names a repo-change grant, its tick and its receipt's `delegated_scope` may name: `repo_read_blob` (read a blob tracked at the tip) and `repo_write_path` (write one of the scope's exact allowed paths). A repo-change capability list is these names comma-separated, each at most once, with no whitespace.
+- **Layer:** protocol (`RepoChangeTool`, `ALL_REPO_CHANGE_TOOLS`).
+- **Wire:** the `scope` of a repo-change `StandingDelegation` / `DelegationToken`; `tool_name` on a repo-change tool receipt.
+- **Standard:** novel.
+- **Forbidden synonyms:** read_file, write_file (builtin filesystem tools, never repo-change tools), permission.
+
 ### 5.5 SensitivityLevel
 
 - **Definition:** the closed, ordered classification of data by harm-on-disclosure: `none < personal < medical < financial < secret`. `medical`, `financial` and `secret` data MUST NOT be sent to an external inference provider.
@@ -232,6 +248,14 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Wire:** suite `motebit-jcs-ed25519-b64-v1`; no spec section defines it yet — the canonical shape is the `ToolInvocationReceipt` type in `@motebit/protocol`, signed and verified by `signToolInvocationReceipt` / `verifyToolInvocationReceipt` in `@motebit/crypto`. (`execution-ledger-v1.md` §4 is the step summary, not this receipt.)
 - **Standard:** novel.
 - **Forbidden synonyms:** tool log, trace, span.
+
+### 6.2.1 RepoChangeExecutionReceipt / RepoChangeToolInvocationReceipt
+
+- **Definition:** the profiles of `ExecutionReceipt` and `ToolInvocationReceipt` a repo-change bundle carries: `public_key` is required, and an `ExecutionReceipt` carries none of `delegation_receipts`, `relay_task_id`, `service_result_hash`, `source_digest`, `source_projection`, `source_projection_class`. A profile adds no field; it only narrows.
+- **Layer:** protocol (`RepoChangeExecutionReceipt`, `RepoChangeToolInvocationReceipt`).
+- **Wire:** nested in `spec/schemas/repo-change-bundle-v1.json`. See [`repo-change-v1.md`](repo-change-v1.md) §3.4–3.5.
+- **Standard:** novel.
+- **Forbidden synonyms:** repo receipt (unqualified), proof.
 
 ### 6.3 ContentArtifactManifest
 
@@ -300,6 +324,22 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Standard:** novel.
 - **Forbidden synonyms:** ack, sync attestation, storage proof.
 
+### 6.11 RepoChangeResult (change record)
+
+- **Definition:** the record of one governed repository change: the grant, tick and scope it acted under (by id and `DigestRef`), the repository and object format, the parent and change commits, the sorted `entries` it adds or modifies (each a `RepoChangeEntry`: path, mode, blob), the digests of its tool receipts and system prompt, and the provider, model and runtime version. It is unsigned on its own: it is the canonical-JSON `result` of the agent's `ExecutionReceipt`, for every receipt status (a declared deviation from `execution-ledger-v1.md` §11.1), so the receipt's signature reaches it.
+- **Layer:** protocol (`RepoChangeResult`, `RepoChangeEntry`, `REPO_CHANGE_SPEC_ID`).
+- **Wire:** `spec/schemas/repo-change-v1.json`; `spec: "motebit/repo-change@1.0"`. See [`repo-change-v1.md`](repo-change-v1.md) §3.2–3.3.
+- **Standard:** novel; commit and blob ids follow git's object model.
+- **Forbidden synonyms:** receipt (reserved: the record is a receipt's payload, not a receipt), diff, patch, commit.
+
+### 6.12 RepoChangeBundle
+
+- **Definition:** the evidence file of one governed repository change, landed at `.motebit/bundles/<grant_id>.json` in the same commit as the change: the scope, the grant, the tick, every tool receipt (at most 256) and the execution receipt. Its bytes are exactly its canonical JSON. A grant whose bundle exists on the judged history is spent.
+- **Layer:** protocol (`RepoChangeBundle`, `REPO_CHANGE_BUNDLE_SPEC_ID`); the verification law is `verifyRepoChange` in `@motebit/verifier`.
+- **Wire:** `spec/schemas/repo-change-bundle-v1.json`; `spec: "motebit/repo-change-bundle@1.0"`. See [`repo-change-v1.md`](repo-change-v1.md) §3.6, §7.
+- **Standard:** novel.
+- **Forbidden synonyms:** archive, package, manifest (reserved suffix), proof.
+
 ## 7. Settlement
 
 ### 7.1 SettlementMode
@@ -351,7 +391,7 @@ These rules bind every wire term defined below unless its entry records a deviat
 
 ### 9.2 VerificationVerdict
 
-- **Definition:** the multi-axis result of verifying a signed artifact: `integrity` (`verified | invalid`), `identityBinding` (§10.1), `authority` (`valid | expired | not_yet_valid | insufficient | unknown`), `revocation` (status `fresh | stale | unchecked | revoked`), `temporalBasis`, `evidenceBasis`, and `repair` when any axis is not passing. It has deliberately no top-level boolean; a consumer branches on the axis it depends on.
+- **Definition:** the multi-axis result of verifying a signed artifact: `integrity` (`verified | invalid`), `identityBinding` (§10.1), `authority` (`valid | expired | not_yet_valid | insufficient | unknown`), `revocation` (status `fresh | stale | unchecked | revoked`), `temporalBasis`, `evidenceBasis`, and `repair` when any axis is not passing. It has deliberately no top-level boolean; a consumer branches on the axis it depends on. `temporalBasis` is `clockless | local_clock | ledger_anchored | operator_recorded`; **`operator_recorded`** means a wall-clock time an operator recorded and signed, accepted only under a pinned key of that operator — neither the verifier's clock nor a chain ordering (first use: a landed repo change judged at its squash commit's committer time, [`repo-change-v1.md`](repo-change-v1.md) §9). The subject `type` value **`repo_change`** is a whole governed repository change judged from its bundle.
 - **Layer:** protocol (`VerificationVerdict`), crypto (producers).
 - **Wire:** camelCase TypeScript shape embedded in `EvalAttestation` (a recorded deviation from snake_case wire fields).
 - **Standard:** novel.
@@ -373,6 +413,22 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Standard:** v2 conforms to [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962) §2.1.
 - **Forbidden synonyms:** hash version, tree format.
 
+### 9.4.1 RepoChangeRepairCode
+
+- **Definition:** the closed, append-only list of repair codes a `repo_change` verdict carries, one per failed rule of [`repo-change-v1.md`](repo-change-v1.md) §7, of the form `<axis>.repo_change.<rule>` where `<axis>` is `integrity`, `identity` (for `identityBinding`), `authority` or `revocation`. A code's meaning never changes.
+- **Layer:** protocol (`RepoChangeRepairCode`, `ALL_REPO_CHANGE_REPAIR_CODES`), verifier (`verifyRepoChange`).
+- **Wire:** `RepairInstruction.code` in a `VerificationVerdict`.
+- **Standard:** novel; same shape as the existing verdict repair codes (`integrity.signature_invalid`, `revocation.unchecked`).
+- **Forbidden synonyms:** error code (reserved for upper-case surface error registries), reason.
+
+### 9.4.2 GitObjectFormat
+
+- **Definition:** the hash a git repository names its objects by (git's `extensions.objectFormat`): `sha1` (40 lowercase hex characters per object id) or `sha256` (64). It fixes the length of every commit and blob id in a repo-change record. New formats are appended.
+- **Layer:** protocol (`GitObjectFormat`, `ALL_GIT_OBJECT_FORMATS`, `GIT_OBJECT_ID_HEX_LENGTH`).
+- **Wire:** field `object_format` on `RepoTaskScope` and `RepoChangeResult`.
+- **Standard:** conforms to git's object-format names.
+- **Forbidden synonyms:** hash version, digest algorithm (a `DigestRef` names its own algorithm).
+
 ### 9.5 anchor
 
 - **Definition:** **only** an on-chain commitment of a Merkle root (e.g. a Solana memo `motebit:anchor:v1:…`) over a batch of leaves, such that inclusion of a leaf is provable against the root and the root's existence at a time is provable from the chain. A public key that a verifier pins out of band is a **trust root**, not an anchor.
@@ -393,6 +449,7 @@ These rules bind every wire term defined below unless its entry records a deviat
      Plus **invalid** — a binding was claimed and failed. `invalid` is not a level; it is a failure.
 - **Layer:** protocol (`IdentityBindingVerdict`), crypto, `@motebit/state-export-client`.
 - **Wire:** `"sovereign" | "anchored" | "pinned" | "unverified" | "invalid"`.
+- **Strict pinned (recorded deviation):** a `repo_change` verdict reads `pinned` only by byte-equality of the artifact's `(motebit_id, public_key)` pair with the current pair in a role-typed pin file at the commit being judged — never a key valid in a succession chain at a time an artifact names ([`repo-change-v1.md`](repo-change-v1.md) §2, deviation 3). It is narrower than level 3 above, never wider: a rotated-out key stops authorizing at once.
 - **Standard:** novel; the anchored level follows Key Transparency designs.
 - **Forbidden synonyms:** trust level (reserved, §8.1), verified identity, KYC.
 

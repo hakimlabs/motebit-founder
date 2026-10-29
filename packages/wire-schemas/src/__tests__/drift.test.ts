@@ -59,6 +59,14 @@ import {
   buildHostRetirementJsonSchema,
 } from "../host-roster.js";
 import {
+  REPO_TASK_SCOPE_SCHEMA_ID,
+  REPO_CHANGE_RESULT_SCHEMA_ID,
+  REPO_CHANGE_BUNDLE_SCHEMA_ID,
+  buildRepoTaskScopeJsonSchema,
+  buildRepoChangeResultJsonSchema,
+  buildRepoChangeBundleJsonSchema,
+} from "../repo-change.js";
+import {
   EVIDENCE_PROVENANCE_SCHEMA_ID,
   buildEvidenceProvenanceJsonSchema,
 } from "../evidence-provenance.js";
@@ -776,6 +784,24 @@ const CASES: SchemaCase[] = [
     filename: "host-enrollment-v1.json",
     expectedId: HOST_ENROLLMENT_SCHEMA_ID,
     build: buildHostEnrollmentJsonSchema,
+  },
+  {
+    name: "repo-task-scope-v1",
+    filename: "repo-task-scope-v1.json",
+    expectedId: REPO_TASK_SCOPE_SCHEMA_ID,
+    build: buildRepoTaskScopeJsonSchema,
+  },
+  {
+    name: "repo-change-v1",
+    filename: "repo-change-v1.json",
+    expectedId: REPO_CHANGE_RESULT_SCHEMA_ID,
+    build: buildRepoChangeResultJsonSchema,
+  },
+  {
+    name: "repo-change-bundle-v1",
+    filename: "repo-change-bundle-v1.json",
+    expectedId: REPO_CHANGE_BUNDLE_SCHEMA_ID,
+    build: buildRepoChangeBundleJsonSchema,
   },
   {
     name: "host-retirement-v1",

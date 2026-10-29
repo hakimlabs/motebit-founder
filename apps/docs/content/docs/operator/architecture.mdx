@@ -5,7 +5,7 @@ description: Monorepo structure, enforced layers, services, specs, and data flow
 
 Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 22+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
-The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 37 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build. The 53 directories under `packages/` are 52 workspace libraries on the 7-layer DAG (enforced by `pnpm check-deps`) plus the standalone `github-action` (no `package.json`, outside the DAG); with the 11 apps and 11 services that makes 74 workspace packages in total — 12 publish to npm, the other 62 are workspace-private.
+The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 38 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build. The 53 directories under `packages/` are 52 workspace libraries on the 7-layer DAG (enforced by `pnpm check-deps`) plus the standalone `github-action` (no `package.json`, outside the DAG); with the 11 apps and 11 services that makes 74 workspace packages in total — 12 publish to npm, the other 62 are workspace-private.
 
 <DiagramFigure
   src="protocol-stack"
@@ -128,7 +128,7 @@ motebit/
 │   ├── embed/                 [infrastructure] ONNX embedding service — no identity, no MCP listing.
 │   └── proxy/                 [infrastructure] Vercel edge CORS proxy for the web app — no identity, no MCP listing.
 │
-├── spec/                      # 37 open specifications, each motebit/<name>@1.0
+├── spec/                      # 38 open specifications, each motebit/<name>@1.0
 │   ├── README.md                            Admission rule + class index of every spec (enforced by check-spec-coverage).
 │   ├── terminology-v1.md                    Normative glossary: each public term's literal definition, owning layer, wire form, standard, forbidden synonyms.
 │   ├── identity-v1.md                       motebit.md format, signing, multi-device, guardian, succession.
@@ -166,7 +166,8 @@ motebit/
 │   ├── eval-attestation-v1.md               Signed third-party measurement (subject ≠ signer) — per-axis verdicts embedded whole, closed EvalKind intake, envelope law only; the Auditor archetype's deliverable.
 │   ├── routing-transcript-v1.md             Signed routing-decision transcript (subject = signer, receipt-family) — the frozen candidate set, posterior reads and draws, and decision parameters behind a paid hire; integrity + recomputable faithfulness, two rungs.
 │   ├── sync-hold-receipt-v1.md              Relay-signed record of which synced event ids it stores (subject = signer, receipt-family) — per-id digest + redacted flag, client nonce echoed, pull pages sign their seq range. Draft; what a device may compact against.
-│   └── machine-roster-v1.md                 Which machines a motebit runs unattended work on — a sovereign-signed SET (enrolment + retirement, id = hash, merge = union, remove wins), relay-transported verbatim. Quantify over membership, annotate with liveness; never a lease, never an admission gate.
+│   ├── machine-roster-v1.md                 Which machines a motebit runs unattended work on — a sovereign-signed SET (enrolment + retirement, id = hash, merge = union, remove wins), relay-transported verbatim. Quantify over membership, annotate with liveness; never a lease, never an admission gate.
+│   └── repo-change-v1.md                    Governed repo change — a principal-bound scope, the change record an agent signs as its receipt result, and the bundle landed with the change; a pure offline verifier whose every failure lands on one verdict axis. Draft.
 │
 └── scripts/                   # Drift-defense CI gates
     ├── check-deps.ts                        Layer DAG enforcement. Source of truth for L0–L6.
@@ -254,7 +255,7 @@ Every task settles through the relay or directly peer-to-peer. Relay-mediated: b
 
 ## Specifications
 
-All 37 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
+All 38 specs (listed in the tree above) are Apache-2.0, published in `spec/`, and have working reference implementations in this repo. A third party can stand up an interoperating implementation today using only the published specs and the permissive-floor type packages — no permission required.
 
 The `motebit.md` identity file is the most-used entry point: any tool can verify one with `@motebit/crypto`, with or without the motebit runtime.
 

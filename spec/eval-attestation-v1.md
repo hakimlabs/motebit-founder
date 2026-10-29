@@ -74,12 +74,13 @@ The per-axis structured verdict, as defined by `@motebit/protocol` (`verificatio
 ```
 VerificationVerdict {
   type:            VerdictSubject   // closed union incl. succession | revocation |
-                                    // bond_commitment | solvency_proof (2026-07-08 widening)
+                                    // bond_commitment | solvency_proof (2026-07-08 widening),
+                                    // repo_change (2026-10-28)
   integrity:       "verified" | "invalid"
   identityBinding: "sovereign" | "anchored" | "pinned" | "unverified" | "invalid"
   authority:       "valid" | "expired" | "not_yet_valid" | "insufficient" | "unknown"
   revocation:      { status: "fresh"|"stale"|"unchecked"|"revoked", freshness?: RevocationFreshness }
-  temporalBasis:   "clockless" | "local_clock" | "ledger_anchored"
+  temporalBasis:   "clockless" | "local_clock" | "ledger_anchored" | "operator_recorded"
   evidenceBasis:   EvidenceRef[]
   repair?:         RepairInstruction   // present on any non-passing axis
 }

@@ -4153,6 +4153,37 @@ export { ALL_EVAL_KINDS, isEvalKind } from "./eval-attestation.js";
 export type { TranscriptCandidate, RoutingDecisionTranscript } from "./routing-transcript.js";
 export { ROUTING_TRANSCRIPT_SPEC_ID } from "./routing-transcript.js";
 
+// Governed repo change (spec/repo-change-v1.md; design of record
+// docs/proposals/governed-repo-change-v1.md). Unsigned shapes bound by
+// signatures elsewhere: the scope by the grant's `subject_binding`, the change
+// record as the agent's `ExecutionReceipt.result`. Verification law:
+// `verifyRepoChange` in @motebit/verifier (`VerdictSubject` "repo_change").
+export type {
+  RepoChangeTool,
+  GitObjectFormat,
+  RepoTaskScope,
+  RepoChangeEntry,
+  RepoChangeResult,
+  RepoChangeBundle,
+  RepoChangeExecutionReceipt,
+  RepoChangeToolInvocationReceipt,
+  RepoChangeRepairCode,
+} from "./repo-change.js";
+export {
+  REPO_TASK_SCOPE_SCHEMA,
+  REPO_TASK_SCOPE_SPEC_ID,
+  REPO_CHANGE_SPEC_ID,
+  REPO_CHANGE_BUNDLE_SPEC_ID,
+  REPO_CHANGE_SUBJECT,
+  REPO_TASK_BASE_REF,
+  REPO_CHANGE_MAX_TOOL_RECEIPTS,
+  REPO_CHANGE_MAX_GRANT_LIFETIME_MS,
+  ALL_REPO_CHANGE_TOOLS,
+  ALL_GIT_OBJECT_FORMATS,
+  GIT_OBJECT_ID_HEX_LENGTH,
+  ALL_REPO_CHANGE_REPAIR_CODES,
+} from "./repo-change.js";
+
 // SyncHoldReceipt — the relay's signed record of which sync events it holds
 // (receipt-family: subject = signer = relay; spec/sync-hold-receipt-v1.md).
 // A device may compact only what a relay provably holds; this is the proof.
