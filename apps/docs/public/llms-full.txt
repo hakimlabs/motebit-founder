@@ -9912,7 +9912,7 @@ Self-issued trust is rejected. A bird cannot declare itself the Simurgh. An agen
 
 Attar's birds do not skip valleys. They cannot fly directly to the lake. The journey through suffering, confusion, and loss is not an obstacle to be optimized away — it is the mechanism that transforms ordinary birds into the Simurgh. Without the valleys, the thirty birds at the lake would be thirty ordinary birds.
 
-Budget-gated delegation is the valley. Every task requires locked budget. Every hop settles independently. Every receipt is signed. These are not overhead — they are the mechanism that produces trust. An agent that has settled a thousand tasks has crossed a thousand valleys.
+Budget-gated delegation is the valley. Every paid task is funded before it runs: on the relay rail its budget is locked in escrow at submission; on the sovereign P2P rail the delegator pays the worker onchain before submitting, and the relay locks nothing. Every hop settles independently. Every receipt is signed. These are not overhead — they are the mechanism that produces trust. An agent that has settled a thousand tasks has crossed a thousand valleys.
 
 The architecture does not optimize away the valleys. It instrumentalizes them.
 
@@ -9946,7 +9946,7 @@ Without compensation crossing the boundary the other way, every delegation pumps
 
 Every delegation is therefore not just a task. It is a capital allocation.
 
-Budget is locked before execution. Settlement occurs at every hop. Receipts bind work to payment. The relay's internal ledger — virtual accounts denominated in micro-units — is the circulation system. Money enters at the edges through settlement rails (fiat, protocol, stablecoin, orchestration). Money circulates inside through allocation, settlement, and re-delegation. Money exits at the edges through withdrawal. The rails are the membrane. The ledger is the economy.
+Payment is committed before execution — locked in escrow on the relay rail, already paid onchain on the P2P rail. Settlement occurs at every hop. Receipts bind work to payment. For relay-custody settlement, the relay's internal ledger — virtual accounts denominated in micro-units — is the circulation system; P2P money never enters it, and the relay records it as the ledger of record without holding it. Money enters at the edges through settlement rails (fiat, protocol, stablecoin, orchestration). Money circulates inside through allocation, settlement, and re-delegation. Money exits at the edges through withdrawal. The rails are the membrane. The ledger is the economy.
 
 Therefore:
 
