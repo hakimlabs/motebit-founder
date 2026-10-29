@@ -51,7 +51,8 @@
   "motebit": {
     "implements": [
       "spec/identity-v1.md",
-      "spec/credential-v1.md"
+      "spec/credential-v1.md",
+      "spec/repo-change-v1.md"
     ]
   },
   "scripts": {

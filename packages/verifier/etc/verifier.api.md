@@ -4,6 +4,7 @@
 
 ```ts
 
+import { ALL_REPO_CHANGE_REPAIR_CODES } from '@motebit/protocol';
 import { ApprovalDecision } from '@motebit/crypto';
 import { ArtifactType } from '@motebit/crypto';
 import { AuthorityVerdict } from '@motebit/crypto';
@@ -23,6 +24,7 @@ import { EvidenceProvenanceResult } from '@motebit/crypto';
 import { EvidenceRef } from '@motebit/crypto';
 import { executionReceiptDigest } from '@motebit/crypto';
 import { findGrantRevocation } from '@motebit/crypto';
+import { GitObjectFormat } from '@motebit/protocol';
 import { HardwareAttestationVerifiers } from '@motebit/crypto';
 import { IdentityBindingVerdict } from '@motebit/crypto';
 import { IntegrityVerdict } from '@motebit/crypto';
@@ -31,6 +33,14 @@ import { InvoiceVerdict } from '@motebit/crypto';
 import { isFullyVerified } from '@motebit/crypto';
 import { ProjectionClass } from '@motebit/crypto';
 import { RepairInstruction } from '@motebit/crypto';
+import { RepoChangeBundle } from '@motebit/protocol';
+import { RepoChangeEntry } from '@motebit/protocol';
+import { RepoChangeExecutionReceipt } from '@motebit/protocol';
+import { RepoChangeRepairCode } from '@motebit/protocol';
+import { RepoChangeResult } from '@motebit/protocol';
+import { RepoChangeTool } from '@motebit/protocol';
+import { RepoChangeToolInvocationReceipt } from '@motebit/protocol';
+import { RepoTaskScope } from '@motebit/protocol';
 import { RevocationFreshness } from '@motebit/crypto';
 import { RevocationStatus } from '@motebit/crypto';
 import { RevocationVerdict } from '@motebit/crypto';
@@ -74,6 +84,8 @@ import { verifyTokenAgainstGrant } from '@motebit/crypto';
 import { verifyWithdrawalReceipt } from '@motebit/crypto';
 import { WithdrawalReceiptPayload } from '@motebit/protocol';
 
+export { ALL_REPO_CHANGE_REPAIR_CODES }
+
 export { ApprovalDecision }
 
 export { ArtifactType }
@@ -115,6 +127,8 @@ export { findGrantRevocation }
 // @public
 export function formatHuman(result: VerifyResultWithBinding): string;
 
+export { GitObjectFormat }
+
 export { IdentityBindingVerdict }
 
 export { IntegrityVerdict }
@@ -128,6 +142,93 @@ export { isFullyVerified }
 export { ProjectionClass }
 
 export { RepairInstruction }
+
+export { RepoChangeBundle }
+
+// @public
+export interface RepoChangeComputedEntry {
+    readonly blob: string;
+    readonly containsNul: boolean;
+    // (undocumented)
+    readonly kind: "add" | "modify" | "delete";
+    readonly mode: string;
+    readonly path: Uint8Array;
+    readonly previousMode?: string;
+}
+
+// @public (undocumented)
+export interface RepoChangeDiagnostics {
+    readonly failures: readonly RepoChangeFailure[];
+    readonly revocationsReadAt?: string;
+}
+
+export { RepoChangeEntry }
+
+export { RepoChangeExecutionReceipt }
+
+// @public
+export interface RepoChangeFailure {
+    // (undocumented)
+    readonly axis: RepairInstruction["axis"];
+    // (undocumented)
+    readonly code: RepoChangeRepairCode;
+    // (undocumented)
+    readonly detail: string;
+}
+
+// @public
+export type RepoChangeMode = {
+    readonly kind: "pull_request";
+    readonly shapeFailures: readonly string[];
+    readonly now: number;
+} | {
+    readonly kind: "landed";
+    readonly shapeFailures: readonly string[];
+    readonly landedAt: number | null;
+};
+
+// @public
+export interface RepoChangePin {
+    // (undocumented)
+    readonly motebit_id: string;
+    // (undocumented)
+    readonly public_key: string;
+}
+
+// @public
+export interface RepoChangePins {
+    readonly agents: readonly RepoChangePin[];
+    readonly principal: RepoChangePin | null;
+}
+
+export { RepoChangeRepairCode }
+
+export { RepoChangeResult }
+
+// @public
+export interface RepoChangeRevocationSet {
+    // (undocumented)
+    readonly failures: readonly string[];
+    // (undocumented)
+    readonly freshness: RevocationFreshness;
+    readonly readAt?: string;
+    // (undocumented)
+    readonly set: readonly DelegationRevocation[];
+}
+
+export { RepoChangeTool }
+
+export { RepoChangeToolInvocationReceipt }
+
+// @public (undocumented)
+export interface RepoChangeVerification {
+    // (undocumented)
+    readonly diagnostics: RepoChangeDiagnostics;
+    readonly outcome: "completed" | "failed" | "denied" | null;
+    readonly verdict: VerificationVerdict;
+}
+
+export { RepoTaskScope }
 
 export { RevocationFreshness }
 
@@ -204,6 +305,22 @@ export { verifyKeySuccession }
 export { verifyMerkleInclusion }
 
 export { verifyReceiptVerdict }
+
+// @public
+export function verifyRepoChange(input: VerifyRepoChangeInput): Promise<RepoChangeVerification>;
+
+// @public (undocumented)
+export interface VerifyRepoChangeInput {
+    readonly bundle: Uint8Array;
+    readonly entries: readonly RepoChangeComputedEntry[];
+    readonly expectedRepo: string;
+    readonly isPathPermitted: (path: string) => boolean;
+    readonly mode: RepoChangeMode;
+    readonly pins: RepoChangePins;
+    readonly revocations?: RepoChangeRevocationSet;
+    readonly spent: boolean;
+    readonly trackedPaths: readonly Uint8Array[];
+}
 
 export { verifyRequestEnvelope }
 
