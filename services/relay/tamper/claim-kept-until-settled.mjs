@@ -41,9 +41,10 @@ const CLAIM = "services/relay/src/claim-settlement.ts";
 const MIDDLEWARE = "services/relay/src/middleware.ts";
 const TEST = "src/__tests__/claim-kept-until-settled.test.ts";
 
-// Run as commands with a red marker, not as vitest entries: the relay's vitest
-// config pins the JSON reporter's outputFile (the precedent is
-// services/relay/tamper/*.mjs). `-t`, anchored to the exact full name, narrows
+// Run as commands with a red marker, written while vitest entries could not
+// run (#1062; see services/relay/tamper/federation-recipient-binding.mjs).
+// Vitest entries work again since the runner names its own reporter; command
+// mode remains valid. `-t`, anchored to the exact full name, narrows
 // each run to the one test that must go red.
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const only = (red) => ({

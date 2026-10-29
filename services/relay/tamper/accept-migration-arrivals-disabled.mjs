@@ -20,8 +20,9 @@ import { runTampers } from "../../../scripts/lib/tamper-runner.ts";
 
 const ROOT = resolve(new URL(".", import.meta.url).pathname, "../../..");
 const MIG = "services/relay/src/migration.ts";
-// Run as a command with a red marker, not as a vitest entry: the repo's vitest
-// config pins the JSON reporter's outputFile (see federation-recipient-binding.mjs).
+// Run as a command with a red marker, written while vitest entries could not
+// run (#1062; see federation-recipient-binding.mjs). Vitest entries work again
+// since the runner names its own reporter; command mode remains valid.
 const CONTAINMENT = {
   command: [
     "pnpm",

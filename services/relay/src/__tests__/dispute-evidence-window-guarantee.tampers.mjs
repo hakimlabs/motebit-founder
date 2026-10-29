@@ -93,10 +93,12 @@ const TAMPERS = [
   },
 ];
 
-// Run as a command with a red marker, not as a vitest entry: the relay's vitest
-// config pins the JSON reporter's outputFile, so the runner's own report is
-// never written (the precedent is services/relay/tamper/*.mjs). `-t`, anchored
-// to the exact full name, narrows each run to the one test that must go red.
+// Run as a command with a red marker, written while vitest entries could not
+// run (#1062: the relay's vitest config pinned the JSON reporter's outputFile,
+// so the runner's own report was never written). Vitest entries work again
+// since the runner names its own reporter (tamper-runner.ts META_REPORTER);
+// command mode remains valid. `-t`, anchored to the exact full name, narrows
+// each run to the one test that must go red.
 const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 await runTampers(

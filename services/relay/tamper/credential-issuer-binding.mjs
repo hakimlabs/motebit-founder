@@ -36,8 +36,9 @@ const INDEX = "packages/crypto/src/index.ts";
 const RELAY = "services/relay/src/credentials.ts";
 const MARKET = "packages/market/src/credential-weight.ts";
 
-// Run as commands with a red marker, not as vitest entries: the repo's vitest
-// config pins the JSON reporter's outputFile (see federation-recipient-binding.mjs).
+// Run as commands with a red marker, written while vitest entries could not
+// run (#1062; see federation-recipient-binding.mjs). Vitest entries work again
+// since the runner names its own reporter; command mode remains valid.
 const vitest = (pkg, file) => ({
   command: ["pnpm", "--filter", pkg, "exec", "vitest", "run", file],
   redMarker: "Test Files  1 failed",
