@@ -100,7 +100,7 @@ Trust is the temperature of the interior. It is not a boolean, and it is not one
 
 Trust rises slowly. Each positive interaction — a task completed and signed for — adds thermal energy. But the thermal capacity is high. Trust does not spike after one good interaction any more than a cold ocean warms from a single sunny day. It accumulates through consistent exchange, as a droplet warms through sustained exposure to a warm medium.
 
-Trust cools through violation. A violation — a failed task, and a paid failure counts heavier — is a cooling event. The ledger keeps the whole history, so cooling is measured against everything that came before: a short history cools fast, a long warm one takes a long run of breaches to cool.
+Trust cools through violation. A violation — a failed task — is a cooling event. A paid failure counts heavier only in the per-capability record that routing reads (a `paid_failure_penalty` that makes the failure weigh up to five times, scaled by what the buyer paid); the trust level itself moves on the raw counts, one failure per failed task. The ledger keeps the whole history, so cooling is measured against everything that came before: a short history cools fast, a long warm one takes a long run of breaches to cool.
 
 The trust state is meant to be visible through the body. The behavior engine has the effect built: given the average trust level across the counterparts the motebit knows, a warmer ledger adds a little glow and brings the hover a little closer (DROPLET.md §6.5). It is not wired yet: no surface calls `BehaviorEngine.setTrustContext`, so today the ledger does not reach the body. When it is wired, you will see the temperature without a thermometer. The liquescent membrane will transmit it.
 
