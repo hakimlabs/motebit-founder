@@ -1066,6 +1066,68 @@ describe("verifyRepoChange authority", () => {
     expectRule(r, "authority.repo_change.lifetime_exceeded");
   });
 
+  describe("a structural tick failure outranks a time before the window", () => {
+    const breaches: readonly [string, Opts][] = [
+      [
+        "a TTL over max_token_ttl_ms",
+        { tick: (t) => void (t.expires_at = t.issued_at + 2 * HOUR) },
+      ],
+      ["a grant_id of another grant", { tick: (t) => void (t.grant_id = OTHER_GRANT_ID) }],
+      [
+        "a delegator other than the grant's",
+        { tick: (t) => void (t.delegator_id = "someone-else") },
+      ],
+      ["a scope wider than the grant's", { grant: (g) => void (g.scope = "repo_read_blob") }],
+    ];
+    const timings: readonly [string, Opts][] = [
+      [
+        "before the grant starts",
+        {
+          input: (i) => void (i.mode = { kind: "pull_request", shapeFailures: [], now: T0 - MIN }),
+        },
+      ],
+      [
+        "before the tick starts",
+        {
+          tick: (t) => {
+            t.issued_at = T0 + 30 * MIN;
+            t.expires_at = T0 + 90 * MIN;
+          },
+        },
+      ],
+    ];
+    for (const [breach, b] of breaches) {
+      for (const [timing, w] of timings) {
+        it(`${breach}, evaluated ${timing}, reads insufficient`, async () => {
+          const r = await run({
+            ...b,
+            ...w,
+            tick: (t) => {
+              w.tick?.(t);
+              b.tick?.(t);
+            },
+          });
+          expectRule(r, "authority.repo_change.tick_insufficient");
+          expect(r.verdict.authority).toBe("insufficient");
+        });
+      }
+    }
+  });
+
+  it("a time after the grant expired reads the tick as expired", async () => {
+    const r = await run({
+      grant: (g) => {
+        g.expires_at = T0 + 2 * HOUR;
+        g.cadence_ms = 2 * HOUR;
+        g.max_token_ttl_ms = 3 * HOUR;
+      },
+      tick: (t) => void (t.expires_at = T0 + 3 * HOUR),
+      input: (i) =>
+        void (i.mode = { kind: "pull_request", shapeFailures: [], now: T0 + 150 * MIN }),
+    });
+    expectRule(r, "authority.repo_change.tick_expired");
+  });
+
   it("a tick that outlives its grant is insufficient", async () => {
     const r = await run({
       grant: (g) => {

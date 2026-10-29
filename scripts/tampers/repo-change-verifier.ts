@@ -306,7 +306,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "integrity: tick signature check removed",
     `${INT} a tick whose signature does not verify is rejected`,
-    off('  if (tokenVerdict.integrity !== "verified") {'),
+    off('  if (structural.integrity !== "verified") {'),
   ),
   entry(
     "integrity: execution receipt signature check removed",
@@ -524,7 +524,15 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "authority: tick expiry not mapped",
     `${AUT} a tick past its expiry reads expired`,
-    off('  } else if (tokenVerdict.authority === "expired") {'),
+    off('  } else if (wallClock.authority === "expired" || now > grant.expires_at) {'),
+  ),
+  entry(
+    "authority: grant expiry not read as the tick's expiry",
+    `${AUT} a time after the grant expired reads the tick as expired`,
+    edit(
+      '  } else if (wallClock.authority === "expired" || now > grant.expires_at) {',
+      '  } else if (wallClock.authority === "expired") {',
+    ),
   ),
   entry(
     "authority: tick activation not mapped",
@@ -534,7 +542,7 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "authority: tick insufficiency not mapped",
     `${AUT} a tick whose TTL exceeds the grant's max_token_ttl_ms is insufficient`,
-    off('  } else if (tokenVerdict.authority !== "valid") {'),
+    off('  if (structural.authority !== "valid") {'),
   ),
   entry(
     "authority: unavailable time not reported",
@@ -547,7 +555,21 @@ const TAMPERS: TamperEntry[] = [
   entry(
     "authority: tick not judged structurally when time is unavailable",
     `${AUT} with no acceptable time, a structurally invalid tick still reads insufficient`,
-    off('    if (tokenVerdict.authority !== "valid") {'),
+    off('  if (structural.authority !== "valid") {'),
+  ),
+  ...[
+    "a TTL over max_token_ttl_ms",
+    "a grant_id of another grant",
+    "a delegator other than the grant's",
+    "a scope wider than the grant's",
+  ].flatMap((breach) =>
+    ["before the grant starts", "before the tick starts"].map((timing) =>
+      entry(
+        `authority: structural tick check removed (${breach}, ${timing})`,
+        `${AUT} a structural tick failure outranks a time before the window ${breach}, evaluated ${timing}, reads insufficient`,
+        off('  if (structural.authority !== "valid") {'),
+      ),
+    ),
   ),
   entry(
     "authority: tick outliving its grant not checked",

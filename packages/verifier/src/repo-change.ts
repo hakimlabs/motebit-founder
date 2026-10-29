@@ -996,17 +996,19 @@ export async function verifyRepoChange(
   });
   if (!grantSigned)
     fail("integrity.repo_change.signature_invalid", "the grant's signature does not verify");
-  // With no acceptable time, the tick is still judged structurally (ordering
-  // mode: parties, scope, TTL, the grant at the tick's own slot), never by a
-  // clock it does not have.
-  const tokenVerdict = await verifyDelegationTokenVerdict(
-    tick,
-    grant,
+  // The tick is judged STRUCTURALLY first, independent of any clock (ordering
+  // mode: grant_id, parties, scope narrowing, TTL, the grant at the tick's own
+  // slot), so a structural failure is never masked by a temporal one. The
+  // wall-clock verdict is computed only at an accepted time, for the window.
+  const structural = await verifyDelegationTokenVerdict(tick, grant, {
+    now: tick.issued_at,
+    temporalMode: "ordering",
+  });
+  const wallClock =
     now === null
-      ? { now: tick.issued_at, temporalMode: "ordering" }
-      : { now, temporalMode: "wall_clock" },
-  );
-  if (tokenVerdict.integrity !== "verified") {
+      ? null
+      : await verifyDelegationTokenVerdict(tick, grant, { now, temporalMode: "wall_clock" });
+  if (structural.integrity !== "verified") {
     fail("integrity.repo_change.signature_invalid", "the tick's signature does not verify");
   }
   const receiptSigned =
@@ -1209,17 +1211,19 @@ export async function verifyRepoChange(
   if (tick.issued_at < grant.issued_at) {
     fail("authority.repo_change.tick_predates_grant", "tick.issued_at < grant.issued_at");
   }
-  if (now === null) {
+  if (structural.authority !== "valid") {
+    fail("authority.repo_change.tick_insufficient", "the tick is not a valid tick of the grant");
+  }
+  // Temporal checks follow; a structural `insufficient` above still outranks
+  // whatever they report (finish()).
+  if (now === null || wallClock === null) {
     fail("authority.repo_change.time_unavailable", "the evaluation time could not be accepted");
-    if (tokenVerdict.authority !== "valid") {
-      fail("authority.repo_change.tick_insufficient", "the tick is not a valid tick of the grant");
-    }
   } else if (now < grantStart) {
     fail(
       "authority.repo_change.grant_not_yet_valid",
       "the grant was not yet active at the evaluation time",
     );
-  } else if (tokenVerdict.authority === "expired") {
+  } else if (wallClock.authority === "expired" || now > grant.expires_at) {
     fail("authority.repo_change.tick_expired", "the tick had expired at the evaluation time");
   } else if (now < tickStart) {
     // `tickStart` is max(issued_at, not_before): it covers crypto's own
@@ -1228,8 +1232,10 @@ export async function verifyRepoChange(
       "authority.repo_change.tick_not_yet_valid",
       "the tick was not yet valid (issued_at or not_before) at the evaluation time",
     );
-  } else if (tokenVerdict.authority !== "valid") {
-    fail("authority.repo_change.tick_insufficient", "the tick is not a valid tick of the grant");
+  } else if (wallClock.authority !== "valid") {
+    // Structurally valid, inside both windows, yet refused at this time:
+    // fail closed.
+    fail("authority.repo_change.tick_insufficient", "the tick is not valid at the evaluation time");
   }
   if (tick.expires_at > grant.expires_at) {
     fail("authority.repo_change.tick_outlives_grant", "tick.expires_at > grant.expires_at");
