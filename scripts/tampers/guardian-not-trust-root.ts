@@ -16,9 +16,11 @@ import { fileURLToPath } from "node:url";
 import { runTampers, type TamperEntry } from "../lib/tamper-runner.js";
 
 /**
- * Run as a command with a red marker, not as a vitest entry: the repo's vitest
- * config pins the JSON reporter's outputFile (the precedent is
- * services/relay/tamper/accept-migration-arrivals-disabled.mjs). `-t` narrows
+ * Run as a command with a red marker, written while vitest entries could not
+ * run (#1062: vitest.shared.ts's JSON reporter outputFile overrode the
+ * runner's). Vitest entries work again since the runner names its own
+ * reporter (tamper-runner.ts META_REPORTER); command mode remains valid.
+ * `-t` narrows
  * the run to the one test that must go red.
  */
 function escapeRegExp(text: string): string {

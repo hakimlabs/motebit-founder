@@ -26,10 +26,12 @@ import { runTampers } from "../../../scripts/lib/tamper-runner.ts";
 
 const ROOT = resolve(new URL(".", import.meta.url).pathname, "../../..");
 const FED = "services/relay/src/federation.ts";
-// Run as commands with a red marker, not as vitest entries: the repo's vitest
-// config pins the JSON reporter's outputFile (vitest.shared.ts
-// TEST_RESULTS_FILE, #1062), so the runner's own --outputFile.json is never
-// written and every vitest entry reads "BASELINE NOT GREEN". vitest prints
+// Run as commands with a red marker. Written this way while vitest entries
+// could not run (#1062: vitest.shared.ts's JSON reporter outputFile overrode
+// the runner's --outputFile.json, so every vitest entry read "BASELINE NOT
+// GREEN"); since the runner names its own reporter (tamper-runner.ts
+// META_REPORTER) vitest entries work again, and command mode remains valid.
+// vitest prints
 // "Test Files  1 failed" only when the file fails.
 const vitest = (test) => ({
   command: ["pnpm", "--filter", "@motebit/relay", "exec", "vitest", "run", test],

@@ -17,9 +17,11 @@ import { runTampers, type TamperEntry } from "../lib/tamper-runner.ts";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /**
- * Run as a command with a red marker, not as a vitest entry: the repo's vitest
- * config pins the JSON reporter's outputFile (the precedent is
- * scripts/tampers/guardian-not-trust-root.ts). `-t` narrows the run to the one
+ * Run as a command with a red marker, written while vitest entries could not
+ * run (#1062: vitest.shared.ts's JSON reporter outputFile overrode the
+ * runner's). Vitest entries work again since the runner names its own
+ * reporter (tamper-runner.ts META_REPORTER); command mode remains valid.
+ * `-t` narrows the run to the one
  * test that must go red, anchored to its exact full name.
  */
 function escapeRegExp(text: string): string {

@@ -10,10 +10,12 @@
  * non-zero exit, a missing report, a crash, a typo'd path, a port someone
  * else holds, a flaky test, a process a previous run left behind — none of
  * these is evidence that the tamper bit. Concretely:
- *   - vitest runs with a machine-readable reporter (vitest's `json`, written to
- *     a file, plus a two-line companion reporter for the unhandled errors and
- *     error names the `json` reporter drops) and the verdict is decided from
- *     those files, never from the exit code or a grep of the text output;
+ *   - vitest runs with the runner's OWN machine-readable reporter, named by
+ *     path so no package config can redirect it (META_REPORTER: the `json`
+ *     reporter's per-test shape plus the unhandled errors and error names that
+ *     shape drops, written to files the runner names) and the verdict is
+ *     decided from those files, never from the exit code or a grep of the text
+ *     output; a missing or unparsable file is never evidence;
  *   - BASELINE: before any tamper, every distinct test (pkg + test file, or
  *     command) runs once in a slot with no edit. It must run, report at least
  *     one passing test and no failure, exit 0 and leave no process behind — or
@@ -1182,13 +1184,69 @@ function relEdit(root: string, file: string): string {
 // Evidence.
 
 /**
- * The companion reporter: vitest's `json` reporter drops unhandled errors, the
- * run's end reason, and each failed test's error NAME and message (a timeout's
- * message included: its failureMessages carry only a placeholder stack).
+ * The runner's ONE reporter, named on the command line by its path, so no
+ * vitest config can reach it. It writes two files, both at paths the runner
+ * hands it in its environment and reads back itself:
+ *
+ *   - TAMPER_RUNNER_JSON: the per-file, per-test verdict in the shape of
+ *     vitest's `json` reporter (`testResults[].{name,status,message,
+ *     assertionResults[].{fullName,status,failureMessages}}`), computed by the
+ *     same algorithm over the same task tree (vitest's JsonReporter, 4.1), so a
+ *     `red:` name is exactly the full name vitest's JSON reporter gives;
+ *   - TAMPER_RUNNER_META: what that shape drops — unhandled errors, the run's
+ *     end reason, and each failed test's error NAME and message (a timeout's
+ *     message included: its failureMessages carry only a placeholder stack).
+ *
+ * Why not vitest's own `json` reporter with `--outputFile.json`: a CLI
+ * `--reporter=json` keeps the CONFIG's options for a reporter of the same
+ * name, and a config's `["json", { outputFile }]` beats `--outputFile.json`.
+ * The repo's vitest.shared.ts pins exactly that (TEST_RESULTS_FILE, #1062, for
+ * CI's verdict job), so from #1062 on every vitest-mode tamper read "vitest
+ * wrote no JSON report" and aborted at baseline. A reporter named by path
+ * matches no config entry: the report goes where the runner says, whatever
+ * the package's config, and TEST_RESULTS_FILE keeps meaning only what CI reads.
+ * Locked by scripts/__tests__/tamper-runner.shared-config.test.ts.
  */
 const META_REPORTER = `import { writeFileSync } from "node:fs";
+const STATUS = { fail: "failed", only: "pending", pass: "passed", run: "pending", skip: "skipped", todo: "todo", queued: "pending" };
+function testsOf(task) {
+  const out = [];
+  for (const t of task.tasks ?? []) {
+    if (t.type === "test") out.push(t);
+    else out.push(...testsOf(t));
+  }
+  return out;
+}
+function jsonReport(modules) {
+  const testResults = [];
+  for (const m of modules ?? []) {
+    const file = m.task;
+    const tests = testsOf(file);
+    const assertionResults = tests.map((t) => {
+      const ancestorTitles = [];
+      for (let it = t.suite; it; it = it.suite) ancestorTitles.push(it.name);
+      ancestorTitles.reverse();
+      return {
+        ancestorTitles,
+        fullName: t.name ? [...ancestorTitles, t.name].join(" ") : ancestorTitles.join(" "),
+        status: STATUS[t.result?.state || t.mode] || "skipped",
+        title: t.name,
+        failureMessages: t.result?.errors?.map((e) => e.stack || e.message) || [],
+      };
+    });
+    const hasFailedTests = tests.some((t) => t.result?.state === "fail");
+    testResults.push({
+      assertionResults,
+      status: file.result?.state === "fail" || hasFailedTests ? "failed" : "passed",
+      message: file.result?.errors?.[0]?.message ?? "",
+      name: file.filepath,
+    });
+  }
+  return { testResults };
+}
 export default class TamperRunnerMeta {
   onTestRunEnd(modules, errors, reason) {
+    writeFileSync(process.env.TAMPER_RUNNER_JSON, JSON.stringify(jsonReport(modules)));
     const unhandled = (errors ?? []).map((e) => String(e?.stack ?? e?.message ?? e));
     const failed = [];
     for (const m of modules ?? []) {
@@ -1280,13 +1338,14 @@ async function runVitest(
     "vitest",
     "run",
     test,
-    "--reporter=json",
-    `--outputFile.json=${jsonPath}`,
+    // The runner's own reporter ONLY, by path (see META_REPORTER): never
+    // `--reporter=json`, whose options a config's json entry overrides.
     `--reporter=${reporterPath}`,
   );
   if (only != null) args.push("-t", `^${escapeRegExp(only)}$`);
   const t = await run(running, slot.hygiene, "pnpm", args, slot.dir, {
     ...env,
+    TAMPER_RUNNER_JSON: jsonPath,
     TAMPER_RUNNER_META: metaPath,
   });
   const ev: VitestEvidence = {

@@ -26,8 +26,9 @@ const GATE = "services/relay/src/guardian-recovery-containment.ts";
 const ROTATE = "services/relay/src/key-rotation.ts";
 const AGENTS = "services/relay/src/agents.ts";
 const APPLY = "services/relay/src/succession-apply.ts";
-// Run as a command with a red marker, not as a vitest entry: the repo's vitest
-// config pins the JSON reporter's outputFile (see federation-recipient-binding.mjs).
+// Run as a command with a red marker, written while vitest entries could not
+// run (#1062; see federation-recipient-binding.mjs). Vitest entries work again
+// since the runner names its own reporter; command mode remains valid.
 const CONTAINMENT = {
   command: [
     "pnpm",
