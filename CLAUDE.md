@@ -16,7 +16,7 @@ MCP standardizes tool access and its authorization. A2A standardizes agent disco
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript. Node ≥ 22, pnpm 9.15. 53 directories under `packages/`: 52 workspace libraries on the 7-layer DAG (enforced by `pnpm check-deps`) plus the standalone `github-action` (no `package.json`, outside the DAG). 5 surfaces + 6 supporting apps, 11 services, 37 open protocol specs. 74 workspace packages in total (52 libraries + 11 apps + 11 services): 12 publish to npm, the other 62 are workspace-private.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 22, pnpm 9.15. 53 directories under `packages/`: 52 workspace libraries on the 7-layer DAG (enforced by `pnpm check-deps`) plus the standalone `github-action` (no `package.json`, outside the DAG). 5 surfaces + 6 supporting apps, 11 services, 38 open protocol specs. 74 workspace packages in total (52 libraries + 11 apps + 11 services): 12 publish to npm, the other 62 are workspace-private.
 
 Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
