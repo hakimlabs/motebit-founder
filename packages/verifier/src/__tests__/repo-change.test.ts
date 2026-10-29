@@ -3,7 +3,7 @@
  * spec/repo-change-v1.md §7 (the axis table and the "change entry outside the
  * scope" list). Each negative asserts the rule's repair code (and, where one
  * code covers several sites, the site's detail), so removing the rule's check
- * turns its test red (scripts/tampers/repo-change-verifier.ts).
+ * turns its test red (the repo-change verifier tamper file, repo root, tamper suites).
  *
  * Fixtures are real: Ed25519 keys, artifacts signed with @motebit/crypto, the
  * bundle serialized as canonical JSON. Each test changes one thing at the
@@ -50,6 +50,7 @@ import {
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const T0 = 1_800_000_000_000;
+const DAY = 24 * HOUR;
 const GRANT_ID = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
 const OTHER_GRANT_ID = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
 const REPO = "motebit/motebit";
@@ -281,7 +282,7 @@ async function makeCase(
       principal: { motebit_id: F_ID, public_key: hex(k.f) },
       agents: [{ motebit_id: A_ID, public_key: hex(k.a) }],
     },
-    isPathPermitted: (p) => !p.startsWith(".motebit/") && !p.startsWith(".github/"),
+    isPathPermitted: (p) => !p.startsWith(".motebit/") && !p.startsWith(".ci/"),
     revocations: {
       set: [],
       failures: [],
@@ -466,6 +467,11 @@ describe("verifyRepoChange integrity", () => {
     expectRule(r, "integrity.repo_change.bundle_malformed");
   });
 
+  it("a tick without grant_id is malformed", async () => {
+    const r = await run({ tickSigned: (t) => void delete t.grant_id });
+    expectRule(r, "integrity.repo_change.bundle_malformed");
+  });
+
   it("a bundle with a key the spec does not name is malformed", async () => {
     const r = await run({
       bundle: (b) => {
@@ -596,6 +602,8 @@ describe("verifyRepoChange integrity", () => {
     "docs//a.md",
     "/docs/a.md",
     "docs/./a.md",
+    "docs/a.",
+    ".git./config",
   ]) {
     it(`a non-canonical allowed path is rejected: ${JSON.stringify(bad)}`, async () => {
       const r = await run({ scope: (s) => void s.allowed_paths.push(bad) });
@@ -945,6 +953,119 @@ describe("verifyRepoChange authority", () => {
     expect(r.verdict.authority).toBe("insufficient");
   });
 
+  describe("an evaluation time that is not a finite number is no time at all", () => {
+    for (const [label, value] of [
+      ["NaN", Number.NaN],
+      ["Infinity", Number.POSITIVE_INFINITY],
+      ["-Infinity", Number.NEGATIVE_INFINITY],
+    ] as const) {
+      it(`pull_request now = ${label} reads unknown`, async () => {
+        const r = await run({
+          input: (i) => void (i.mode = { kind: "pull_request", shapeFailures: [], now: value }),
+        });
+        expectRule(r, "authority.repo_change.time_unavailable");
+        expect(r.verdict.authority).toBe("unknown");
+      });
+      it(`landed landedAt = ${label} reads unknown`, async () => {
+        const r = await run({
+          input: (i) => void (i.mode = { kind: "landed", shapeFailures: [], landedAt: value }),
+        });
+        expectRule(r, "authority.repo_change.time_unavailable");
+        expect(r.verdict.authority).toBe("unknown");
+      });
+    }
+    it("a landed mode with no landedAt (a JS caller) reads unknown, never the local clock", async () => {
+      const r = await run({
+        input: (i) =>
+          void (i.mode = { kind: "landed", shapeFailures: [] } as unknown as typeof i.mode),
+      });
+      expectRule(r, "authority.repo_change.time_unavailable");
+      expect(r.verdict.authority).toBe("unknown");
+    });
+  });
+
+  it("a grant issued in the future reads not_yet_valid at the evaluation time", async () => {
+    const r = await run({
+      grant: (g) => {
+        g.issued_at = T0 + 30 * DAY;
+        g.expires_at = T0 + 31 * DAY;
+      },
+      tick: (t) => {
+        t.issued_at = T0 + 30 * DAY;
+        t.expires_at = T0 + 30 * DAY + HOUR;
+      },
+    });
+    expectRule(r, "authority.repo_change.grant_not_yet_valid");
+    expect(r.verdict.authority).toBe("not_yet_valid");
+  });
+
+  it("a tick issued in the future (no not_before) reads not_yet_valid", async () => {
+    const r = await run({
+      tick: (t) => {
+        t.issued_at = T0 + 30 * MIN;
+        t.expires_at = T0 + 90 * MIN;
+      },
+    });
+    expectRule(r, "authority.repo_change.tick_not_yet_valid");
+    expect(r.verdict.authority).toBe("not_yet_valid");
+  });
+
+  it("a tick back-dated before its grant is insufficient", async () => {
+    const r = await run({
+      grant: (g) => void (g.max_token_ttl_ms = 400 * DAY),
+      tick: (t) => {
+        t.issued_at = T0 - 365 * DAY;
+        t.expires_at = T0 + HOUR;
+      },
+    });
+    expectRule(r, "authority.repo_change.tick_predates_grant");
+    expect(r.verdict.authority).toBe("insufficient");
+  });
+
+  it("a grant that starts after it expires is insufficient", async () => {
+    const r = await run({
+      grant: (g) => {
+        g.issued_at = T0;
+        g.expires_at = T0 - HOUR;
+        g.cadence_ms = 0;
+      },
+    });
+    expectRule(r, "authority.repo_change.window_inverted", "grant starts");
+  });
+
+  it("a tick that starts after it expires is insufficient", async () => {
+    const r = await run({ tick: (t) => void (t.not_before = T0 + 2 * HOUR) });
+    expectRule(r, "authority.repo_change.window_inverted", "tick starts");
+  });
+
+  it("the grant lifetime counts from its activation (not_before)", async () => {
+    const r = await run({
+      grant: (g) => {
+        g.not_before = T0 + HOUR;
+        g.expires_at = T0 + 24 * HOUR;
+        g.cadence_ms = 23 * HOUR;
+      },
+      tick: (t) => {
+        t.issued_at = T0 + HOUR;
+        t.expires_at = T0 + 2 * HOUR;
+      },
+      input: (i) => void (i.mode = { kind: "pull_request", shapeFailures: [], now: T0 + 90 * MIN }),
+    });
+    expect(r.diagnostics.failures).toEqual([]);
+    expect(isFullyVerified(r.verdict)).toBe(true);
+  });
+
+  it("a grant activated late still may not live more than 24 hours after activation", async () => {
+    const r = await run({
+      grant: (g) => {
+        g.not_before = T0 + HOUR;
+        g.expires_at = T0 + 26 * HOUR;
+        g.cadence_ms = 26 * HOUR;
+      },
+    });
+    expectRule(r, "authority.repo_change.lifetime_exceeded");
+  });
+
   it("a tick that outlives its grant is insufficient", async () => {
     const r = await run({
       grant: (g) => {
@@ -1090,7 +1211,7 @@ describe("verifyRepoChange authority", () => {
   });
 
   it("an allowed path the predicate refuses is insufficient", async () => {
-    const r = await run({ scope: (s) => void s.allowed_paths.push(".github/workflows/x.yml") });
+    const r = await run({ scope: (s) => void s.allowed_paths.push(".ci/workflows/x.yml") });
     expectRule(r, "authority.repo_change.scope_path_not_permitted");
   });
 
@@ -1144,6 +1265,13 @@ describe("verifyRepoChange authority", () => {
       expectRule(r, "authority.repo_change.entry_binary");
     });
 
+    it("a tracked path that is not UTF-8 fails the case-collision rule closed", async () => {
+      const r = await run({
+        input: (i) => void (i.trackedPaths = [...i.trackedPaths, new Uint8Array([0x64, 0xff])]),
+      });
+      expectRule(r, "authority.repo_change.entry_case_collision", "not valid UTF-8");
+    });
+
     it("a path that collides by case with a tracked directory is outside the scope", async () => {
       const r = await run({
         input: (i) => void (i.trackedPaths = [...i.trackedPaths, enc.encode("Docs/b.md")]),
@@ -1192,9 +1320,9 @@ describe("verifyRepoChange authority", () => {
 
     it("an allowed path the predicate refuses is outside the scope", async () => {
       const r = await run({
-        scope: (s) => void (s.allowed_paths = [".github/x.yml"]),
-        record: (x) => void (x.entries = [{ path: ".github/x.yml", mode: "100644", blob: BLOB }]),
-        input: (i) => void (i.entries = [entry({ path: enc.encode(".github/x.yml") })]),
+        scope: (s) => void (s.allowed_paths = [".ci/x.yml"]),
+        record: (x) => void (x.entries = [{ path: ".ci/x.yml", mode: "100644", blob: BLOB }]),
+        input: (i) => void (i.entries = [entry({ path: enc.encode(".ci/x.yml") })]),
       });
       expectRule(r, "authority.repo_change.entry_path_not_permitted");
     });

@@ -44,9 +44,10 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(?!(?:.*\\/)?(?:\\.|\\.\\.|\\.[gG][iI][tT])(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*$",
+            "pattern": "^(?!(?:.*\\/)?(?:[^/]*\\.|\\.[gG][iI][tT])(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*$",
             "description": "A path the change may add or modify, compared byte-exact with git's path bytes."
           },
+          "uniqueItems": true,
           "description": "Paths the change may add or modify. Unique."
         },
         "max_changed_files": {
@@ -79,8 +80,8 @@
       "properties": {
         "grant_id": {
           "type": "string",
-          "minLength": 1,
-          "description": "UUIDv7 — the stable handle a DelegationRevocation targets. Per-tick tokens minted under this grant carry it as `grant_id`."
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "UUID — the grant's stable handle; names the bundle and any revocation file."
         },
         "delegator_id": {
           "type": "string",
@@ -273,8 +274,9 @@
           "type": "number"
         },
         "grant_id": {
-          "description": "Optional link to a StandingDelegation this token was minted under (standing-delegation@1.0 §3). Absent ⇒ a standalone single-act delegation (today's semantics). Present ⇒ one tick of a standing grant; verify with `verifyTokenAgainstGrant`. Backward compatible.",
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "REQUIRED here: the grant this tick belongs to."
         },
         "suite": {
           "type": "string",
@@ -295,6 +297,7 @@
         "scope",
         "issued_at",
         "expires_at",
+        "grant_id",
         "suite",
         "signature"
       ],

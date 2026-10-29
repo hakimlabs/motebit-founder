@@ -191,8 +191,8 @@ export interface RepoChangeBundle {
   readonly scope: RepoTaskScope;
   /** The principal's `StandingDelegation` to the agent. */
   readonly grant: StandingDelegation;
-  /** The principal's per-tick `DelegationToken` under the grant. */
-  readonly tick: DelegationToken;
+  /** The principal's per-tick `DelegationToken` under the grant; `grant_id` is required. */
+  readonly tick: DelegationToken & { readonly grant_id: string };
   /** At most {@link REPO_CHANGE_MAX_TOOL_RECEIPTS}. */
   readonly tool_receipts: readonly RepoChangeToolInvocationReceipt[];
   /** The agent's signed outcome; its `result` is the change record. */
@@ -260,6 +260,9 @@ export type RepoChangeRepairCode =
   | "authority.repo_change.entry_path_not_permitted"
   | "authority.repo_change.entries_exceed_max"
   | "authority.repo_change.entries_mismatch"
+  | "authority.repo_change.grant_not_yet_valid"
+  | "authority.repo_change.window_inverted"
+  | "authority.repo_change.tick_predates_grant"
   // revocation
   | "revocation.repo_change.revoked"
   | "revocation.repo_change.unchecked"
@@ -318,6 +321,9 @@ export const ALL_REPO_CHANGE_REPAIR_CODES: readonly RepoChangeRepairCode[] = Obj
   "authority.repo_change.entry_path_not_permitted",
   "authority.repo_change.entries_exceed_max",
   "authority.repo_change.entries_mismatch",
+  "authority.repo_change.grant_not_yet_valid",
+  "authority.repo_change.window_inverted",
+  "authority.repo_change.tick_predates_grant",
   "revocation.repo_change.revoked",
   "revocation.repo_change.unchecked",
   "revocation.repo_change.set_malformed",

@@ -67,12 +67,26 @@ export const REPO_CHANGE_BUNDLE_SCHEMA_ID =
 
 /**
  * A canonical repository path: segments of `[A-Za-z0-9._-]+` (ASCII only),
- * joined by `/`, with no empty, `.`, `..` or `.git` (any case) segment and no
- * leading or trailing `/`. One regular expression, so the committed JSON
+ * joined by `/`, with no empty segment, no segment ending in `.` (so no `.`,
+ * `..`, `a.` or `.git.` — NTFS drops a trailing dot), no `.git` segment in any
+ * case, and no leading or trailing `/`. One regular expression, so the committed JSON
  * Schema states the same rule the verifier applies.
  */
 export const REPO_PATH_PATTERN =
-  /^(?!(?:.*\/)?(?:\.|\.\.|\.[gG][iI][tT])(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+  /^(?!(?:.*\/)?(?:[^/]*\.|\.[gG][iI][tT])(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+
+/** A lowercase UUID: one spelling, safe as a file name. */
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const grantId = (what: string) =>
+  z.string().regex(CANONICAL_UUID, "grant_id MUST be a lowercase UUID").describe(what);
+
+/** Array members unique — `uniqueItems` in the committed JSON Schema, checked at runtime too. */
+function unique<T extends z.ZodType>(schema: z.ZodArray<T>, key: (v: z.infer<T>) => string) {
+  return schema
+    .refine((a) => new Set(a.map(key)).size === a.length, "items MUST be unique")
+    .meta({ uniqueItems: true });
+}
 
 const repoPath = (what: string) =>
   z
@@ -143,12 +157,16 @@ export const RepoTaskScopeSchema = z
       ),
     base_ref: z.literal(REPO_TASK_BASE_REF).describe("The protected branch the change lands on."),
     object_format: ObjectFormatSchema,
-    allowed_paths: z
-      .array(
-        repoPath("A path the change may add or modify, compared byte-exact with git's path bytes."),
-      )
-      .min(1)
-      .describe("Paths the change may add or modify. Unique."),
+    allowed_paths: unique(
+      z
+        .array(
+          repoPath(
+            "A path the change may add or modify, compared byte-exact with git's path bytes.",
+          ),
+        )
+        .min(1),
+      (p) => p,
+    ).describe("Paths the change may add or modify. Unique."),
     max_changed_files: z
       .number()
       .int()
@@ -186,7 +204,7 @@ export const RepoChangeEntrySchema = z
 export const RepoChangeResultSchema = z
   .object({
     spec: z.literal(REPO_CHANGE_SPEC_ID).describe("Spec tag of the change record."),
-    grant_id: z.string().min(1).describe("The grant the run acted under."),
+    grant_id: grantId("The grant the run acted under."),
     grant_digest: DigestRefSchema.describe(
       "SHA-256 of the canonical JSON of the whole signed grant, signature included.",
     ),
@@ -203,10 +221,10 @@ export const RepoChangeResultSchema = z
     entries: z
       .array(RepoChangeEntrySchema)
       .describe("Every path the change adds or modifies, sorted by path bytes, unique."),
-    tool_receipt_digests: z
-      .array(DigestRefSchema)
-      .max(REPO_CHANGE_MAX_TOOL_RECEIPTS)
-      .describe("SHA-256 of the canonical JSON of each signed tool receipt in the bundle. Unique."),
+    tool_receipt_digests: unique(
+      z.array(DigestRefSchema).max(REPO_CHANGE_MAX_TOOL_RECEIPTS),
+      (d) => d.value,
+    ).describe("SHA-256 of the canonical JSON of each signed tool receipt in the bundle. Unique."),
     system_prompt_digest: DigestRefSchema.describe(
       "SHA-256 of the UTF-8 bytes of the system prompt the run used.",
     ),
@@ -295,12 +313,16 @@ export const RepoChangeBundleSchema = z
   .object({
     spec: z.literal(REPO_CHANGE_BUNDLE_SPEC_ID).describe("Spec tag of the bundle."),
     scope: RepoTaskScopeSchema,
-    grant: StandingDelegationSchema.extend({ signature: signatureB64 }).describe(
-      "The principal's StandingDelegation to the agent.",
-    ),
-    tick: DelegationTokenSchema.extend({ signature: signatureB64 }).describe(
-      "The principal's per-tick DelegationToken under the grant.",
-    ),
+    grant: StandingDelegationSchema.extend({
+      grant_id: grantId(
+        "UUID — the grant's stable handle; names the bundle and any revocation file.",
+      ),
+      signature: signatureB64,
+    }).describe("The principal's StandingDelegation to the agent."),
+    tick: DelegationTokenSchema.extend({
+      grant_id: grantId("REQUIRED here: the grant this tick belongs to."),
+      signature: signatureB64,
+    }).describe("The principal's per-tick DelegationToken under the grant."),
     tool_receipts: z
       .array(RepoChangeToolInvocationReceiptSchema)
       .max(REPO_CHANGE_MAX_TOOL_RECEIPTS)

@@ -297,6 +297,18 @@ const REPAIR: Readonly<Record<RepoChangeRepairCode, { summary: string; fix: stri
     summary: "The tick's expires_at is later than the grant's.",
     fix: "Mint the tick with expires_at no later than the grant's.",
   },
+  "authority.repo_change.grant_not_yet_valid": {
+    summary: "The grant was not yet active (issued_at or not_before) at the evaluation time.",
+    fix: "Do not land the change before the grant's issued_at and not_before.",
+  },
+  "authority.repo_change.window_inverted": {
+    summary: "The grant or the tick starts (issued_at / not_before) after it expires.",
+    fix: "Issue the grant and tick with a start no later than expires_at.",
+  },
+  "authority.repo_change.tick_predates_grant": {
+    summary: "The tick was issued before the grant it claims to be a tick of.",
+    fix: "Issue the tick at or after the grant's issued_at.",
+  },
   "authority.repo_change.time_unavailable": {
     summary: "The evaluation time could not be accepted, so the tick's window cannot be judged.",
     fix: "Supply a landing time signed by GitHub under a pinned GitHub signing key.",
@@ -486,7 +498,8 @@ function isCanonicalHex(s: string, length: number): boolean {
 function isCanonicalPath(p: string): boolean {
   for (const seg of p.split("/")) {
     if (!PATH_SEGMENT.test(seg)) return false;
-    if (seg === "." || seg === ".." || seg.toLowerCase() === ".git") return false;
+    // A trailing "." (".", "..", "a.", ".git.") is an alias on NTFS, which drops it.
+    if (seg.endsWith(".") || seg.toLowerCase() === ".git") return false;
   }
   return true;
 }
@@ -662,10 +675,11 @@ function isTickShape(v: unknown): v is DelegationToken {
         "scope",
         "issued_at",
         "expires_at",
+        "grant_id",
         "suite",
         "signature",
       ],
-      ["not_before", "grant_id"],
+      ["not_before"],
     ) &&
     isNonEmptyString(v.delegator_id) &&
     isString(v.delegator_public_key) &&
@@ -675,7 +689,7 @@ function isTickShape(v: unknown): v is DelegationToken {
     isNumber(v.issued_at) &&
     isNumber(v.expires_at) &&
     (v.not_before === undefined || isNumber(v.not_before)) &&
-    (v.grant_id === undefined || isString(v.grant_id)) &&
+    isString(v.grant_id) &&
     v.suite === "motebit-jcs-ed25519-b64-v1" &&
     isNonEmptyString(v.signature)
   );
@@ -869,6 +883,7 @@ const TEMPORAL_AUTHORITY_CODES: ReadonlySet<RepoChangeRepairCode> = new Set<Repo
   "authority.repo_change.tick_expired",
   "authority.repo_change.tick_not_yet_valid",
   "authority.repo_change.time_unavailable",
+  "authority.repo_change.grant_not_yet_valid",
 ]);
 
 /**
@@ -888,7 +903,10 @@ export async function verifyRepoChange(
   };
 
   const { mode } = input;
-  const now = mode.kind === "pull_request" ? mode.now : mode.landedAt;
+  // Only a finite number is a time. NaN, ±Infinity, a missing field (a JS
+  // caller) or null all read as "no acceptable time" — never a fallback clock.
+  const rawNow: unknown = mode.kind === "pull_request" ? mode.now : mode.landedAt;
+  const now = typeof rawNow === "number" && Number.isFinite(rawNow) ? rawNow : null;
   const temporalBasis = mode.kind === "pull_request" ? "local_clock" : "operator_recorded";
 
   // -- Mode: ancestry and shape checks fold into integrity. CI records every
@@ -1177,17 +1195,38 @@ export async function verifyRepoChange(
   });
 
   // -- Authority: the tick against the grant, then the repo-change rules.
+  // The authority window (spec §5). Crypto judges `not_before` and expiry; these
+  // bound the rest from `issued_at`, so a future-dated or back-dated grant or
+  // tick cannot open a window wider than the one the grant states.
+  const grantStart = Math.max(grant.issued_at, grant.not_before ?? grant.issued_at);
+  const tickStart = Math.max(tick.issued_at, tick.not_before ?? tick.issued_at);
+  if (grantStart > grant.expires_at) {
+    fail("authority.repo_change.window_inverted", "the grant starts after it expires");
+  }
+  if (tickStart > tick.expires_at) {
+    fail("authority.repo_change.window_inverted", "the tick starts after it expires");
+  }
+  if (tick.issued_at < grant.issued_at) {
+    fail("authority.repo_change.tick_predates_grant", "tick.issued_at < grant.issued_at");
+  }
   if (now === null) {
-    fail("authority.repo_change.time_unavailable", "the landing time could not be accepted");
+    fail("authority.repo_change.time_unavailable", "the evaluation time could not be accepted");
     if (tokenVerdict.authority !== "valid") {
       fail("authority.repo_change.tick_insufficient", "the tick is not a valid tick of the grant");
     }
+  } else if (now < grantStart) {
+    fail(
+      "authority.repo_change.grant_not_yet_valid",
+      "the grant was not yet active at the evaluation time",
+    );
   } else if (tokenVerdict.authority === "expired") {
     fail("authority.repo_change.tick_expired", "the tick had expired at the evaluation time");
-  } else if (tokenVerdict.authority === "not_yet_valid") {
+  } else if (now < tickStart) {
+    // `tickStart` is max(issued_at, not_before): it covers crypto's own
+    // not_before check and the issued_at bound crypto does not make.
     fail(
       "authority.repo_change.tick_not_yet_valid",
-      "the tick was not yet valid at the evaluation time",
+      "the tick was not yet valid (issued_at or not_before) at the evaluation time",
     );
   } else if (tokenVerdict.authority !== "valid") {
     fail("authority.repo_change.tick_insufficient", "the tick is not a valid tick of the grant");
@@ -1223,7 +1262,7 @@ export async function verifyRepoChange(
     );
   }
   const authorized: ReadonlySet<string> = tickTools ?? new Set<string>();
-  const lifetime = grant.expires_at - grant.issued_at;
+  const lifetime = grant.expires_at - grantStart;
   if (lifetime > REPO_CHANGE_MAX_GRANT_LIFETIME_MS) {
     fail("authority.repo_change.lifetime_exceeded", `the grant lives ${lifetime} ms`);
   }
@@ -1331,6 +1370,14 @@ export async function verifyRepoChange(
   for (const t of input.trackedPaths) {
     const s = decodeStrict(t);
     if (s !== null) tracked.push(s);
+    else {
+      // A tracked path the case index cannot read: no collision can be ruled
+      // out, so the rule fails closed rather than silently dropping it.
+      fail(
+        "authority.repo_change.entry_case_collision",
+        "a tracked path is not valid UTF-8, so no case collision can be ruled out",
+      );
+    }
   }
   const index = caseIndex([...tracked, ...changed]);
   for (const p of changed) {
@@ -1433,7 +1480,11 @@ function finish(
     authority = "insufficient";
   else if (codes.has("authority.repo_change.time_unavailable")) authority = "unknown";
   else if (codes.has("authority.repo_change.tick_expired")) authority = "expired";
-  else if (codes.has("authority.repo_change.tick_not_yet_valid")) authority = "not_yet_valid";
+  else if (
+    codes.has("authority.repo_change.grant_not_yet_valid") ||
+    codes.has("authority.repo_change.tick_not_yet_valid")
+  )
+    authority = "not_yet_valid";
   else authority = "valid";
 
   const first = ordered[0];

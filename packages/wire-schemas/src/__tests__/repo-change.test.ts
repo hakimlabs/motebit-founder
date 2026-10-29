@@ -160,6 +160,32 @@ describe("repo-change wire schemas", () => {
     ).toBe(false);
   });
 
+  it("refuse repeated allowed paths and repeated tool receipt digests", () => {
+    expect(
+      RepoTaskScopeSchema.safeParse({ ...scope(), allowed_paths: ["docs/a.md", "docs/a.md"] })
+        .success,
+    ).toBe(false);
+    expect(
+      RepoChangeResultSchema.safeParse({ ...record(), tool_receipt_digests: [sha, sha] }).success,
+    ).toBe(false);
+  });
+
+  it("require a lowercase-UUID grant_id, and a grant_id on the tick", () => {
+    const b = bundle();
+    expect(
+      RepoChangeBundleSchema.safeParse({ ...b, grant: { ...b.grant, grant_id: "grant-1" } })
+        .success,
+    ).toBe(false);
+    const { grant_id: _g, ...tickNoGrant } = b.tick;
+    expect(RepoChangeBundleSchema.safeParse({ ...b, tick: tickNoGrant }).success).toBe(false);
+    expect(
+      RepoChangeResultSchema.safeParse({
+        ...record(),
+        grant_id: "0199A1B2-C3D4-7E5F-8A9B-0C1D2E3F4A5B",
+      }).success,
+    ).toBe(false);
+  });
+
   it("refuse more than 256 tool receipts", () => {
     const b = bundle();
     const many = Array.from({ length: 257 }, () => b.tool_receipts[0]!);
@@ -172,7 +198,7 @@ describe("repo-change wire schemas", () => {
   });
 
   it("the path pattern states the canonical path rule", () => {
-    for (const ok of ["docs/a.md", ".github/x.yml", "a/b-c_d.e/f", ".gitignore", "x/.gitkeep"]) {
+    for (const ok of ["docs/a.md", ".ci/x.yml", "a/b-c_d.e/f", ".gitignore", "x/.gitkeep"]) {
       expect(REPO_PATH_PATTERN.test(ok), ok).toBe(true);
     }
     for (const bad of [
@@ -190,6 +216,9 @@ describe("repo-change wire schemas", () => {
       "docs\\a.md",
       "docs/ſ.md",
       "docs/a b.md",
+      "docs/a.",
+      ".git./config",
+      "a/b./c",
     ]) {
       expect(REPO_PATH_PATTERN.test(bad), JSON.stringify(bad)).toBe(false);
     }
