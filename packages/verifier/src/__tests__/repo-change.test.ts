@@ -931,7 +931,7 @@ describe("verifyRepoChange authority", () => {
 
   it("a tick whose TTL exceeds the grant's max_token_ttl_ms is insufficient", async () => {
     const r = await run({ tick: (t) => void (t.expires_at = T0 + 2 * HOUR) });
-    expectRule(r, "authority.repo_change.tick_insufficient");
+    expectRule(r, "authority.repo_change.tick_insufficient", "not a valid tick of the grant");
     expect(r.verdict.authority).toBe("insufficient");
   });
 
