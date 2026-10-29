@@ -682,7 +682,7 @@ export function handleSkillsAudit(config: CliConfig): void {
 // short-circuits the prompt for scripted/CI use but STILL records the
 // approval row for audit.
 //
-// Drift gate `check-skill-script-uses-tool-approval` (#66) asserts that
+// Drift gate `check-skill-script-uses-tool-approval` (#69) asserts that
 // no skill-script execution path bypasses this canonical entry point.
 
 export async function handleSkillsRunScript(config: CliConfig): Promise<void> {

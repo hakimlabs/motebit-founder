@@ -35,7 +35,7 @@
  * enforcement automatically.
  *
  * Same closed-registry / structural-lock shape as `check-suite-declared`
- * (#10), `check-audience-canonical` (#46), `check-artifact-type-
+ * (#10), `check-audience-canonical` (#83), `check-artifact-type-
  * canonical` (#85), `check-state-export-signed` (#86),
  * `check-transparency-processors-canonical` (#92): the gate asks role
  * questions (does this publishable package have the metadata sigstore
